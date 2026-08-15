@@ -1,0 +1,7 @@
+.idea/
+node_modules/
+out/
+cache/
+artifacts/
+broadcast/
+.env
