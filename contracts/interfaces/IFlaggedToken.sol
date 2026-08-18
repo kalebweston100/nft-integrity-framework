@@ -23,7 +23,6 @@ pragma solidity ^0.8.34;
  * by the buyer (or their tooling) before they commit to a purchase.
  */
 interface IFlaggedToken {
-
     /// @notice Emitted once, atomically with mint, when a token's flags/metadata are committed.
     event FlagsCommitted(uint256 indexed tokenId, uint256 flags, bytes32 metadataHash);
 
@@ -57,11 +56,10 @@ interface IFlaggedToken {
     /// @return ok True only if every requested check passes.
     /// @return actualFlags The token's real, committed flag bitmap.
     /// @return actualMetadataHash The token's real, committed metadata hash.
-    function verifyToken(
-        uint256 tokenId,
-        uint256 requiredFlagsMask,
-        bytes32 expectedMetadataHash
-    ) external view returns (bool ok, uint256 actualFlags, bytes32 actualMetadataHash);
+    function verifyToken(uint256 tokenId, uint256 requiredFlagsMask, bytes32 expectedMetadataHash)
+        external
+        view
+        returns (bool ok, uint256 actualFlags, bytes32 actualMetadataHash);
 
     /// @notice Convenience check: does keccak256(metadata) match the committed hash for `tokenId`?
     function verifyMetadata(uint256 tokenId, bytes calldata metadata) external view returns (bool);

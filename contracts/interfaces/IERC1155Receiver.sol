@@ -3,13 +3,9 @@ pragma solidity ^0.8.34;
 
 /// @notice Interface for contracts that want to support safe ERC-1155 token transfers.
 interface IERC1155Receiver {
-    function onERC1155Received(
-        address operator,
-        address from,
-        uint256 id,
-        uint256 value,
-        bytes calldata data
-    ) external returns (bytes4);
+    function onERC1155Received(address operator, address from, uint256 id, uint256 value, bytes calldata data)
+        external
+        returns (bytes4);
 
     function onERC1155BatchReceived(
         address operator,

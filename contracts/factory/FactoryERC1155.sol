@@ -20,7 +20,6 @@ import "../token/IntegrityERC1155.sol";
  * It holds all token state and calls the hooks contract externally.
  */
 contract FactoryERC1155 is FactoryBase, IFactoryERC1155 {
-
     /// @notice Deploy an ERC-1155 token with optional hooks. Permissionless — anyone
     ///         may deploy, subject only to the configurable deploy fee.
     /// @param issuerAdmin The address that will own and administer the deployed token.
@@ -36,13 +35,8 @@ contract FactoryERC1155 is FactoryBase, IFactoryERC1155 {
         _checkAndCollectFee();
 
         // Step 1: Deploy the token (IntegrityERC1155)
-        IntegrityERC1155 tokenContract = new IntegrityERC1155(
-            address(this),
-            hooksAddr,
-            issuerAdmin,
-            baseTokenURI,
-            contractURI
-        );
+        IntegrityERC1155 tokenContract =
+            new IntegrityERC1155(address(this), hooksAddr, issuerAdmin, baseTokenURI, contractURI);
         token = address(tokenContract);
 
         // Step 2: Initialize hooks (link hooks contract to the deployed token)

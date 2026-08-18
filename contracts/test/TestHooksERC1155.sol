@@ -24,47 +24,59 @@ import "../hooks/HooksERC1155.sol";
  *   token-side effects.
  */
 contract TestHooksERC1155 is HooksERC1155 {
-
     // ─── Call Record Structs ─────────────────────────────────────────────────
 
-    struct TransferRecord { address from; address to; uint256 id; uint256 amount; }
-    struct MintRecord     { address to; uint256 id; uint256 amount; }
-    struct BurnRecord     { address from; uint256 id; uint256 amount; }
+    struct TransferRecord {
+        address from;
+        address to;
+        uint256 id;
+        uint256 amount;
+    }
+
+    struct MintRecord {
+        address to;
+        uint256 id;
+        uint256 amount;
+    }
+
+    struct BurnRecord {
+        address from;
+        uint256 id;
+        uint256 amount;
+    }
 
     // ─── Call Logs ───────────────────────────────────────────────────────────
 
     TransferRecord[] public beforeTransferLog;
     TransferRecord[] public afterTransferLog;
-    MintRecord[]     public beforeMintLog;
-    MintRecord[]     public afterMintLog;
-    BurnRecord[]     public beforeBurnLog;
-    BurnRecord[]     public afterBurnLog;
+    MintRecord[] public beforeMintLog;
+    MintRecord[] public afterMintLog;
+    BurnRecord[] public beforeBurnLog;
+    BurnRecord[] public afterBurnLog;
 
     // ─── Behavior Flags (global) ─────────────────────────────────────────────
 
-    bool   public revertOnTransfer;
+    bool public revertOnTransfer;
     string public transferRevertReason = "TestHooks: transfer blocked";
 
-    bool   public blockMints;
+    bool public blockMints;
     string public blockMintReason = "TestHooks: mint blocked";
 
-    bool   public blockBurns;
+    bool public blockBurns;
     string public blockBurnReason = "TestHooks: burn blocked";
 
     // ─── Behavior Flags (per-tokenId) ────────────────────────────────────────
 
-    mapping(uint256 => bool)   public revertOnTransferById;
-    mapping(uint256 => bool)   public blockMintsById;
-    mapping(uint256 => bool)   public blockBurnsById;
+    mapping(uint256 => bool) public revertOnTransferById;
+    mapping(uint256 => bool) public blockMintsById;
+    mapping(uint256 => bool) public blockBurnsById;
     mapping(uint256 => string) public blockMintReasonById;
     mapping(uint256 => string) public blockBurnReasonById;
     mapping(uint256 => string) public transferRevertReasonById;
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
-    constructor(address _factory, address _issuerAdmin)
-        HooksERC1155(_factory, _issuerAdmin, true)
-    {}
+    constructor(address _factory, address _issuerAdmin) HooksERC1155(_factory, _issuerAdmin, true) {}
 
     // ─── Admin Controls (global) ─────────────────────────────────────────────
 
@@ -85,56 +97,41 @@ contract TestHooksERC1155 is HooksERC1155 {
 
     // ─── Admin Controls (per-tokenId) ────────────────────────────────────────
 
-    function setRevertOnTransferById(uint256 id, bool blocked, string calldata reason)
-        external onlyIssuerAdmin
-    {
+    function setRevertOnTransferById(uint256 id, bool blocked, string calldata reason) external onlyIssuerAdmin {
         revertOnTransferById[id] = blocked;
         transferRevertReasonById[id] = reason;
     }
 
-    function setBlockMintsById(uint256 id, bool blocked, string calldata reason)
-        external onlyIssuerAdmin
-    {
+    function setBlockMintsById(uint256 id, bool blocked, string calldata reason) external onlyIssuerAdmin {
         blockMintsById[id] = blocked;
         blockMintReasonById[id] = reason;
     }
 
-    function setBlockBurnsById(uint256 id, bool blocked, string calldata reason)
-        external onlyIssuerAdmin
-    {
+    function setBlockBurnsById(uint256 id, bool blocked, string calldata reason) external onlyIssuerAdmin {
         blockBurnsById[id] = blocked;
         blockBurnReasonById[id] = reason;
     }
 
     /// @notice Exercises IntegrityERC1155.hookMint() — direct hook-gated mint.
-    function issuerMint(address to, uint256 id, uint256 amount, uint256 flags, bytes32 metadataHash) external onlyIssuerAdmin {
+    function issuerMint(address to, uint256 id, uint256 amount, uint256 flags, bytes32 metadataHash)
+        external
+        onlyIssuerAdmin
+    {
         _mintFromHooks(to, id, amount, flags, metadataHash);
     }
 
     // ─── Hook Overrides ──────────────────────────────────────────────────────
 
-    function _onBeforeTransfer1155(
-        address from,
-        address to,
-        uint256 id,
-        uint256 amount
-    ) internal override {
+    function _onBeforeTransfer1155(address from, address to, uint256 id, uint256 amount) internal override {
         beforeTransferLog.push(TransferRecord(from, to, id, amount));
         if (revertOnTransfer || revertOnTransferById[id]) {
-            string memory reason = revertOnTransferById[id]
-                ? transferRevertReasonById[id]
-                : transferRevertReason;
+            string memory reason = revertOnTransferById[id] ? transferRevertReasonById[id] : transferRevertReason;
             revert(reason);
         }
     }
 
     // afterTransfer1155 is virtual in HooksERC1155Base and not overridden by HooksERC1155.
-    function afterTransfer1155(
-        address from,
-        address to,
-        uint256 id,
-        uint256 amount
-    ) external override onlyToken {
+    function afterTransfer1155(address from, address to, uint256 id, uint256 amount) external override onlyToken {
         afterTransferLog.push(TransferRecord(from, to, id, amount));
     }
 
@@ -143,7 +140,11 @@ contract TestHooksERC1155 is HooksERC1155 {
         uint256 id,
         uint256 amount,
         bytes calldata /*data*/
-    ) internal override returns (bool, string memory) {
+    )
+        internal
+        override
+        returns (bool, string memory)
+    {
         beforeMintLog.push(MintRecord(to, id, amount));
         if (blockMintsById[id]) return (false, blockMintReasonById[id]);
         if (blockMints) return (false, blockMintReason);
@@ -156,15 +157,18 @@ contract TestHooksERC1155 is HooksERC1155 {
         uint256 id,
         uint256 amount,
         bytes calldata /*data*/
-    ) internal override {
+    )
+        internal
+        override
+    {
         afterMintLog.push(MintRecord(to, id, amount));
     }
 
-    function _onBeforeBurn1155(
-        address from,
-        uint256 id,
-        uint256 amount
-    ) internal override returns (bool, string memory) {
+    function _onBeforeBurn1155(address from, uint256 id, uint256 amount)
+        internal
+        override
+        returns (bool, string memory)
+    {
         beforeBurnLog.push(BurnRecord(from, id, amount));
         if (blockBurnsById[id]) return (false, blockBurnReasonById[id]);
         if (blockBurns) return (false, blockBurnReason);
@@ -178,12 +182,29 @@ contract TestHooksERC1155 is HooksERC1155 {
 
     // ─── View Helpers ─────────────────────────────────────────────────────────
 
-    function beforeTransferCount() external view returns (uint256) { return beforeTransferLog.length; }
-    function afterTransferCount()  external view returns (uint256) { return afterTransferLog.length; }
-    function beforeMintCount()     external view returns (uint256) { return beforeMintLog.length; }
-    function afterMintCount()      external view returns (uint256) { return afterMintLog.length; }
-    function beforeBurnCount()     external view returns (uint256) { return beforeBurnLog.length; }
-    function afterBurnCount()      external view returns (uint256) { return afterBurnLog.length; }
+    function beforeTransferCount() external view returns (uint256) {
+        return beforeTransferLog.length;
+    }
+
+    function afterTransferCount() external view returns (uint256) {
+        return afterTransferLog.length;
+    }
+
+    function beforeMintCount() external view returns (uint256) {
+        return beforeMintLog.length;
+    }
+
+    function afterMintCount() external view returns (uint256) {
+        return afterMintLog.length;
+    }
+
+    function beforeBurnCount() external view returns (uint256) {
+        return beforeBurnLog.length;
+    }
+
+    function afterBurnCount() external view returns (uint256) {
+        return afterBurnLog.length;
+    }
 
     function lastBeforeTransfer() external view returns (TransferRecord memory) {
         require(beforeTransferLog.length > 0, "No transfers recorded");

@@ -20,7 +20,6 @@ import "./Types.sol";
  * alongside this interface.
  */
 interface IIntegrityToken {
-
     /// @notice Returns whether this contract implements the IIntegrityToken interface.
     function isIntegrityToken() external pure returns (bool);
 

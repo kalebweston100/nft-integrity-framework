@@ -31,7 +31,6 @@ interface IERC721TotalSupply {
  *   BURN:     ownership check → beforeBurn721 → ownership → afterBurn721
  */
 abstract contract HooksERC721Base is IInitializableHooks {
-
     event TokenInitialized(address indexed tokenContract, address indexed factory);
 
     address public immutable factory;
@@ -111,41 +110,40 @@ abstract contract HooksERC721Base is IInitializableHooks {
 
     function _onBeforeTransfer721(address from, address to, uint256 tokenId) internal virtual {}
 
-    function validateTransfer721(
-        address from,
-        address to,
-        uint256 tokenId
-    ) external view onlyToken returns (bool valid, string memory reason) {
+    function validateTransfer721(address from, address to, uint256 tokenId)
+        external
+        view
+        onlyToken
+        returns (bool valid, string memory reason)
+    {
         return (true, "");
     }
 
     function afterTransfer721(address from, address to, uint256 tokenId) external onlyToken {}
 
-    function onTransferBlocked721(
-        address from,
-        address to,
-        uint256 tokenId,
-        string calldata reason
-    ) external onlyToken {}
+    function onTransferBlocked721(address from, address to, uint256 tokenId, string calldata reason)
+        external
+        onlyToken
+    {}
 
     // =========================================================================
     //                            MINT HOOKS
     // =========================================================================
 
-    function beforeMint721(
-        address to,
-        uint256 tokenId,
-        bytes calldata data
-    ) external onlyToken returns (bool allowed, string memory reason) {
+    function beforeMint721(address to, uint256 tokenId, bytes calldata data)
+        external
+        onlyToken
+        returns (bool allowed, string memory reason)
+    {
         _beforeMintSettle(to);
         return _onBeforeMint721(to, tokenId, data);
     }
 
-    function _onBeforeMint721(
-        address to,
-        uint256 tokenId,
-        bytes calldata data
-    ) internal virtual returns (bool, string memory) {
+    function _onBeforeMint721(address to, uint256 tokenId, bytes calldata data)
+        internal
+        virtual
+        returns (bool, string memory)
+    {
         return (true, "");
     }
 
@@ -155,19 +153,21 @@ abstract contract HooksERC721Base is IInitializableHooks {
     ///         custom flag policy (e.g. cap how many tokens can carry a given flag). This
     ///         hook can only allow/deny — it has no access to token storage and cannot
     ///         write flags itself; only the token contract ever writes flag storage.
-    function validateFlags721(
-        address to,
-        uint256 tokenId,
-        uint256 flags
-    ) external view onlyToken returns (bool allowed, string memory reason) {
+    function validateFlags721(address to, uint256 tokenId, uint256 flags)
+        external
+        view
+        onlyToken
+        returns (bool allowed, string memory reason)
+    {
         return _onValidateFlags721(to, tokenId, flags);
     }
 
-    function _onValidateFlags721(
-        address to,
-        uint256 tokenId,
-        uint256 flags
-    ) internal view virtual returns (bool, string memory) {
+    function _onValidateFlags721(address to, uint256 tokenId, uint256 flags)
+        internal
+        view
+        virtual
+        returns (bool, string memory)
+    {
         return (true, "");
     }
 
@@ -175,9 +175,7 @@ abstract contract HooksERC721Base is IInitializableHooks {
     //                            BURN HOOKS
     // =========================================================================
 
-    function beforeBurn721(
-        uint256 tokenId
-    ) external onlyToken returns (bool allowed, string memory reason) {
+    function beforeBurn721(uint256 tokenId) external onlyToken returns (bool allowed, string memory reason) {
         _beforeBurnSettle(tokenId);
         return _onBeforeBurn721(tokenId);
     }
@@ -192,18 +190,22 @@ abstract contract HooksERC721Base is IInitializableHooks {
     //                          METADATA HOOKS
     // =========================================================================
 
-    function beforeSetBaseURI(
-        string calldata newBaseURI
-    ) external onlyToken returns (bool allowed, string memory reason) {
+    function beforeSetBaseURI(string calldata newBaseURI)
+        external
+        onlyToken
+        returns (bool allowed, string memory reason)
+    {
         return (true, "");
     }
 
     function afterSetBaseURI(string calldata newBaseURI) external onlyToken {}
 
-    function beforeSetTokenURI721(
-        uint256,
-        string calldata
-    ) external view onlyToken returns (bool allowed, string memory reason) {
+    function beforeSetTokenURI721(uint256, string calldata)
+        external
+        view
+        onlyToken
+        returns (bool allowed, string memory reason)
+    {
         return (true, "");
     }
 
@@ -217,7 +219,6 @@ abstract contract HooksERC721Base is IInitializableHooks {
  *         Inherit this if you want royalties; use HooksERC721Base if you do not.
  */
 abstract contract HooksERC721 is HooksERC721Base, RoyaltyBase {
-
     event RoyaltiesDistributed(uint256 amount);
 
     uint256 public accumulatedRoyaltiesPerToken;
@@ -238,7 +239,8 @@ abstract contract HooksERC721 is HooksERC721Base, RoyaltyBase {
     }
 
     function _settleHolder(address holder) internal {
-        uint256 earned = (_tokenBalanceOf(holder) * (accumulatedRoyaltiesPerToken - royaltyDebt[holder])) / ROYALTY_PRECISION;
+        uint256 earned =
+            (_tokenBalanceOf(holder) * (accumulatedRoyaltiesPerToken - royaltyDebt[holder])) / ROYALTY_PRECISION;
         _addPending(holder, earned);
         royaltyDebt[holder] = accumulatedRoyaltiesPerToken;
     }
@@ -266,7 +268,8 @@ abstract contract HooksERC721 is HooksERC721Base, RoyaltyBase {
     }
 
     function pendingRoyaltiesFor(address holder) external view returns (uint256) {
-        uint256 unsettled = (_tokenBalanceOf(holder) * (accumulatedRoyaltiesPerToken - royaltyDebt[holder])) / ROYALTY_PRECISION;
+        uint256 unsettled =
+            (_tokenBalanceOf(holder) * (accumulatedRoyaltiesPerToken - royaltyDebt[holder])) / ROYALTY_PRECISION;
         return pendingRoyalties[holder] + unsettled;
     }
 }

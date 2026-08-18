@@ -41,7 +41,6 @@ import "../interfaces/Errors.sol";
  *   Default fee is 0 (free) until the owner sets one.
  */
 abstract contract FactoryBase is ITokenFactory {
-
     // =========================================================================
     //                              EVENTS
     // =========================================================================
@@ -112,7 +111,7 @@ abstract contract FactoryBase is ITokenFactory {
         uint256 amount = feeBalance;
         if (amount == 0) revert NothingToWithdraw();
         feeBalance = 0;
-        (bool success, ) = payable(to).call{value: amount}("");
+        (bool success,) = payable(to).call{value: amount}("");
         if (!success) revert WithdrawalFailed();
         emit FeesWithdrawn(to, amount);
     }
@@ -179,6 +178,45 @@ abstract contract FactoryBase is ITokenFactory {
         }
 
         return true;
+    }
+
+    // =========================================================================
+    //                     BYTECODE / IMPLEMENTATION VERIFICATION
+    // =========================================================================
+    //
+    // This framework is distributed as source that developers compile and deploy
+    // themselves — there is no shared, hosted, or maintained factory instance and
+    // no on-chain registry of "known good" deployments. Trust is established by
+    // comparing a deployed factory's own runtime bytecode hash (EXTCODEHASH)
+    // against the canonical hash for the framework version you're integrating
+    // with, published alongside that version's source (see README: "Verifying a
+    // deployment"). FactoryBase and its concrete subclasses (FactoryERC20/721/1155)
+    // hold no `immutable` state, so every canonical deployment — regardless of
+    // deployer or constructor-time `owner` — produces byte-identical runtime
+    // bytecode, which is what makes this comparison meaningful.
+
+    /// @notice Checks an arbitrary address's runtime bytecode hash against an
+    ///         expected value, e.g. the canonical hash for a given release of this
+    ///         framework. Safe to use against an UNTRUSTED `target`: EXTCODEHASH is
+    ///         computed by the EVM from the target's actual deployed bytecode, so a
+    ///         malicious contract cannot misreport it — this function never calls
+    ///         into `target`, it only reads its code hash.
+    /// @dev Prefer this over calling a "isCanonical()"-style function ON a factory
+    ///      you don't already trust: a maliciously modified factory could simply
+    ///      hardcode such a function to return true. Only EXTCODEHASH, read
+    ///      externally as done here, cannot be spoofed by the target's own logic.
+    function isCanonicalCodeHash(address target, bytes32 expectedCodeHash) public view returns (bool) {
+        return target.codehash == expectedCodeHash;
+    }
+
+    /// @notice Convenience getter for this factory's own runtime bytecode hash.
+    /// @dev Pure self-report — see `isCanonicalCodeHash` NatSpec for why a verifier
+    ///      checking an UNTRUSTED factory should compute `target.codehash` directly
+    ///      (or call `isCanonicalCodeHash` on a factory instance already trusted)
+    ///      rather than rely on this function's return value from the factory being
+    ///      verified.
+    function runtimeCodeHash() external view returns (bytes32) {
+        return address(this).codehash;
     }
 
     // =========================================================================

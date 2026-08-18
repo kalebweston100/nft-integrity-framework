@@ -21,7 +21,6 @@ import "../token/IntegrityERC721.sol";
  * the hooks contract externally.
  */
 contract FactoryERC721 is FactoryBase, IFactoryERC721 {
-
     /// @notice Deploy an ERC-721 token with optional hooks. Permissionless — anyone
     ///         may deploy, subject only to the configurable deploy fee.
     /// @param issuerAdmin The address that will own and administer the deployed token.
@@ -40,15 +39,8 @@ contract FactoryERC721 is FactoryBase, IFactoryERC721 {
         _checkAndCollectFee();
 
         // Step 1: Deploy the token (IntegrityERC721)
-        IntegrityERC721 tokenContract = new IntegrityERC721(
-            address(this),
-            hooksAddr,
-            issuerAdmin,
-            tokenName,
-            tokenSymbol,
-            contractURI,
-            baseURI
-        );
+        IntegrityERC721 tokenContract =
+            new IntegrityERC721(address(this), hooksAddr, issuerAdmin, tokenName, tokenSymbol, contractURI, baseURI);
         token = address(tokenContract);
 
         // Step 2: Initialize hooks (link hooks contract to the deployed token)

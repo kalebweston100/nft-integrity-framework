@@ -20,7 +20,6 @@ import "../token/IntegrityERC20.sol";
  * It holds all token state and calls the hooks contract externally.
  */
 contract FactoryERC20 is FactoryBase, IFactoryERC20 {
-
     /// @notice Deploy an ERC-20 token with optional hooks. Permissionless — anyone
     ///         may deploy, subject only to the configurable deploy fee.
     /// @param issuerAdmin The address that will own and administer the deployed token.
@@ -38,14 +37,8 @@ contract FactoryERC20 is FactoryBase, IFactoryERC20 {
         _checkAndCollectFee();
 
         // Step 1: Deploy the token (IntegrityERC20)
-        IntegrityERC20 tokenContract = new IntegrityERC20(
-            address(this),
-            hooksAddr,
-            issuerAdmin,
-            tokenName,
-            tokenSymbol,
-            contractURI
-        );
+        IntegrityERC20 tokenContract =
+            new IntegrityERC20(address(this), hooksAddr, issuerAdmin, tokenName, tokenSymbol, contractURI);
         token = address(tokenContract);
 
         // Step 2: Initialize hooks (link hooks contract to the deployed token)

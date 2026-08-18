@@ -21,35 +21,44 @@ import "../hooks/HooksERC20.sol";
  *   by observing token-side effects rather than hook-side recording.
  */
 contract TestHooksERC20 is HooksERC20 {
-
     // ─── Call Record Structs ─────────────────────────────────────────────────
 
-    struct TransferRecord { address from; address to; uint256 amount; }
-    struct MintRecord     { address to; uint256 amount; }
-    struct BurnRecord     { address from; uint256 amount; }
+    struct TransferRecord {
+        address from;
+        address to;
+        uint256 amount;
+    }
+
+    struct MintRecord {
+        address to;
+        uint256 amount;
+    }
+
+    struct BurnRecord {
+        address from;
+        uint256 amount;
+    }
 
     // ─── Call Logs ───────────────────────────────────────────────────────────
 
     TransferRecord[] public beforeTransferLog;
-    MintRecord[]     public beforeMintLog;
-    BurnRecord[]     public beforeBurnLog;
+    MintRecord[] public beforeMintLog;
+    BurnRecord[] public beforeBurnLog;
 
     // ─── Behavior Flags ──────────────────────────────────────────────────────
 
-    bool   public revertOnTransfer;
+    bool public revertOnTransfer;
     string public transferRevertReason = "TestHooks: transfer blocked";
 
-    bool   public blockMints;
+    bool public blockMints;
     string public blockMintReason = "TestHooks: mint blocked";
 
-    bool   public blockBurns;
+    bool public blockBurns;
     string public blockBurnReason = "TestHooks: burn blocked";
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
-    constructor(address _factory, address _issuerAdmin)
-        HooksERC20Base(_factory, _issuerAdmin)
-    {}
+    constructor(address _factory, address _issuerAdmin) HooksERC20Base(_factory, _issuerAdmin) {}
 
     // ─── Admin Controls ──────────────────────────────────────────────────────
 
@@ -87,16 +96,17 @@ contract TestHooksERC20 is HooksERC20 {
         address to,
         uint256 amount,
         bytes calldata /*data*/
-    ) internal override returns (bool, string memory) {
+    )
+        internal
+        override
+        returns (bool, string memory)
+    {
         beforeMintLog.push(MintRecord(to, amount));
         if (blockMints) return (false, blockMintReason);
         return (true, "");
     }
 
-    function _onBeforeBurn(
-        address from,
-        uint256 amount
-    ) internal override returns (bool, string memory) {
+    function _onBeforeBurn(address from, uint256 amount) internal override returns (bool, string memory) {
         beforeBurnLog.push(BurnRecord(from, amount));
         if (blockBurns) return (false, blockBurnReason);
         return (true, "");
@@ -104,9 +114,17 @@ contract TestHooksERC20 is HooksERC20 {
 
     // ─── View Helpers ─────────────────────────────────────────────────────────
 
-    function beforeTransferCount() external view returns (uint256) { return beforeTransferLog.length; }
-    function beforeMintCount()     external view returns (uint256) { return beforeMintLog.length; }
-    function beforeBurnCount()     external view returns (uint256) { return beforeBurnLog.length; }
+    function beforeTransferCount() external view returns (uint256) {
+        return beforeTransferLog.length;
+    }
+
+    function beforeMintCount() external view returns (uint256) {
+        return beforeMintLog.length;
+    }
+
+    function beforeBurnCount() external view returns (uint256) {
+        return beforeBurnLog.length;
+    }
 
     function lastBeforeTransfer() external view returns (TransferRecord memory) {
         require(beforeTransferLog.length > 0, "No transfers recorded");

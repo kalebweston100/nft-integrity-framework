@@ -1,0 +1,5 @@
+{
+    "filter_paths": "lib/",
+    "exclude_dependencies": true,
+    "foundry_out_directory": "out"
+}

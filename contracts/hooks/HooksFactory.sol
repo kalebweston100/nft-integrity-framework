@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.34;
 
 import "../interfaces/ITokenFactory.sol";
 import "../interfaces/Errors.sol";
@@ -7,7 +7,7 @@ import "../interfaces/Errors.sol";
 /**
  * @title HooksFactory
  * @notice Abstract base for factory contracts that deploy tokens using the
- *         TokenLFG compliance hooks system.
+ *         Integrity Token Framework's compliance hooks system.
  *
  * Provides two-step ownership, platform fee accumulation/withdrawal, a typed
  * reference to the underlying token factory, and protected helpers for each
@@ -27,7 +27,6 @@ import "../interfaces/Errors.sol";
  *   }
  */
 abstract contract HooksFactory {
-
     event PlatformFeesWithdrawn(address indexed to, uint256 amount);
     event OwnershipTransferStarted(address indexed currentOwner, address indexed pendingOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
@@ -123,7 +122,7 @@ abstract contract HooksFactory {
         uint256 amount = platformFeeBalance;
         if (amount == 0) revert NothingToWithdraw();
         platformFeeBalance = 0;
-        (bool success, ) = payable(to).call{value: amount}("");
+        (bool success,) = payable(to).call{value: amount}("");
         if (!success) revert WithdrawalFailed();
         emit PlatformFeesWithdrawn(to, amount);
     }

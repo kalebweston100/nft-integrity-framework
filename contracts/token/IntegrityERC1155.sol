@@ -41,7 +41,6 @@ import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
  *   - Hooks address is immutable — set at deployment, cannot be changed
  */
 contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, IntegrityTokenBase {
-
     // =========================================================================
     //                          EVENTS
     // =========================================================================
@@ -121,7 +120,9 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     //                     CHAIN-OF-TRUST GETTERS
     // =========================================================================
 
-    function hooksContract() external view returns (address) { return address(_hooks); }
+    function hooksContract() external view returns (address) {
+        return address(_hooks);
+    }
 
     // =========================================================================
     //              AGGREGATE BALANCE TRACKING (private helper)
@@ -142,13 +143,12 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     //                  ERC-1155 ENTRY POINTS (non-virtual, locked)
     // =========================================================================
 
-    function safeTransferFrom(
-        address from,
-        address to,
-        uint256 id,
-        uint256 amount,
-        bytes calldata data
-    ) external override nonReentrant whenNotPaused {
+    function safeTransferFrom(address from, address to, uint256 id, uint256 amount, bytes calldata data)
+        external
+        override
+        nonReentrant
+        whenNotPaused
+    {
         if (from != msg.sender && !_operatorApprovals[from][msg.sender]) revert NotOwnerOrApproved();
         _transferPipeline1155(from, to, id, amount);
         _checkOnERC1155Received(msg.sender, from, to, id, amount, data);
@@ -161,7 +161,9 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         uint256[] calldata amounts,
         bytes calldata data
     ) external override nonReentrant whenNotPaused {
-        if (from != msg.sender && !_operatorApprovals[from][msg.sender]) revert NotOwnerOrApproved();
+        if (from != msg.sender && !_operatorApprovals[from][msg.sender]) {
+            revert NotOwnerOrApproved();
+        }
         if (ids.length != amounts.length) revert LengthMismatch();
 
         for (uint256 i = 0; i < ids.length; i++) {
@@ -186,12 +188,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     //                   TRANSFER PIPELINE (private, locked)
     // =========================================================================
 
-    function _transferPipeline1155(
-        address from,
-        address to,
-        uint256 id,
-        uint256 amount
-    ) private {
+    function _transferPipeline1155(address from, address to, uint256 id, uint256 amount) private {
         // [LOCKED] Sufficient balance check
         if (amount == 0) revert ZeroAmount();
         if (_balances[id][from] < amount) revert InsufficientBalance();
@@ -225,7 +222,8 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
 
         // [HOOKS - external call, safe] Developer's post-transfer logic
         if (_hasHooks) {
-            try _hooks.afterTransfer1155(from, to, id, amount) {} catch (bytes memory reason) {
+            try _hooks.afterTransfer1155(from, to, id, amount) {}
+            catch (bytes memory reason) {
                 emit HookCallFailed("afterTransfer1155", reason);
             }
         }
@@ -246,14 +244,12 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     ///              committed, or the call reverts.
     /// @param metaHash keccak256 commitment to this id's canonical off-chain metadata.
     /// @param data Arbitrary data forwarded to hooks.
-    function mint(
-        address to,
-        uint256 id,
-        uint256 amount,
-        uint256 flags,
-        bytes32 metaHash,
-        bytes calldata data
-    ) external onlyIssuerAdmin whenNotPaused nonReentrant {
+    function mint(address to, uint256 id, uint256 amount, uint256 flags, bytes32 metaHash, bytes calldata data)
+        external
+        onlyIssuerAdmin
+        whenNotPaused
+        nonReentrant
+    {
         _mintLogic(msg.sender, to, id, amount, flags, metaHash, data);
         _totalSupply += amount;
     }
@@ -304,7 +300,8 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         // [HOOKS, safe] Call afterMint for each token class
         if (_hasHooks) {
             for (uint256 i = 0; i < ids.length; i++) {
-                try _hooks.afterMint1155(to, ids[i], amounts[i], data) {} catch (bytes memory reason) {
+                try _hooks.afterMint1155(to, ids[i], amounts[i], data) {}
+                catch (bytes memory reason) {
                     emit HookCallFailed("afterMint1155", reason);
                 }
             }
@@ -334,14 +331,20 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
 
         // [HOOKS - external call, safe] Developer's post-burn logic
         if (_hasHooks) {
-            try _hooks.afterBurn1155(from, id, amount) {} catch (bytes memory reason) {
+            try _hooks.afterBurn1155(from, id, amount) {}
+            catch (bytes memory reason) {
                 emit HookCallFailed("afterBurn1155", reason);
             }
         }
     }
 
     /// @notice Batch burn tokens with holder tracking. Only callable by issuer admin.
-    function burnBatch(address from, uint256[] calldata ids, uint256[] calldata amounts) external onlyIssuerAdmin whenNotPaused nonReentrant {
+    function burnBatch(address from, uint256[] calldata ids, uint256[] calldata amounts)
+        external
+        onlyIssuerAdmin
+        whenNotPaused
+        nonReentrant
+    {
         if (ids.length != amounts.length) revert LengthMismatch();
 
         // [HOOKS] Call beforeBurn for each token class
@@ -368,7 +371,8 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         // [HOOKS, safe] Call afterBurn for each token class
         if (_hasHooks) {
             for (uint256 i = 0; i < ids.length; i++) {
-                try _hooks.afterBurn1155(from, ids[i], amounts[i]) {} catch (bytes memory reason) {
+                try _hooks.afterBurn1155(from, ids[i], amounts[i]) {}
+                catch (bytes memory reason) {
                     emit HookCallFailed("afterBurn1155", reason);
                 }
             }
@@ -387,7 +391,8 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
 
         // [HOOKS - external call, safe] Developer's post-URI logic
         if (_hasHooks) {
-            try _hooks.afterSetURI(newuri) {} catch (bytes memory reason) {
+            try _hooks.afterSetURI(newuri) {}
+            catch (bytes memory reason) {
                 emit HookCallFailed("afterSetURI", reason);
             }
         }
@@ -404,7 +409,8 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         _tokenURIs[id] = newTokenURI;
 
         if (_hasHooks) {
-            try _hooks.afterSetTokenURI1155(id, newTokenURI) {} catch (bytes memory reason) {
+            try _hooks.afterSetTokenURI1155(id, newTokenURI) {}
+            catch (bytes memory reason) {
                 emit HookCallFailed("afterSetTokenURI1155", reason);
             }
         }
@@ -425,9 +431,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     }
 
     /// @notice ERC-2981 royalty info query.
-    function royaltyInfo(uint256, uint256 salePrice)
-        external view returns (address receiver, uint256 royaltyAmount)
-    {
+    function royaltyInfo(uint256, uint256 salePrice) external view returns (address receiver, uint256 royaltyAmount) {
         receiver = _royaltyReceiver;
         royaltyAmount = (salePrice * _royaltyFeeNumerator) / 10000;
     }
@@ -469,7 +473,8 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
 
         // [HOOKS - external call, safe] Developer's post-mint logic
         if (_hasHooks) {
-            try _hooks.afterMint1155(to, id, amount, data) {} catch (bytes memory reason) {
+            try _hooks.afterMint1155(to, id, amount, data) {}
+            catch (bytes memory reason) {
                 emit HookCallFailed("afterMint1155", reason);
             }
         }
@@ -499,7 +504,12 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     ///         afterMint1155 (guarded by _inHookMint) so per-tokenId supply tracking in
     ///         HooksERC1155 stays accurate.
     /// @dev Only callable by the hooks contract. Reverts if no hooks contract is set.
-    function hookMint(address to, uint256 id, uint256 amount, uint256 flags, bytes32 metaHash) external override whenNotPaused nonReentrant {
+    function hookMint(address to, uint256 id, uint256 amount, uint256 flags, bytes32 metaHash)
+        external
+        override
+        whenNotPaused
+        nonReentrant
+    {
         if (!_hasHooks || msg.sender != address(_hooks)) revert NotHooksContract();
         if (to == address(0)) revert ZeroAddress();
         if (_inHookMint) revert ReentrantHookMint();
@@ -520,7 +530,8 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
 
         // [HOOKS, safe] afterMint1155 for supply tracking — guarded against re-entry
         _inHookMint = true;
-        try _hooks.afterMint1155(to, id, amount, "") {} catch (bytes memory reason) {
+        try _hooks.afterMint1155(to, id, amount, "") {}
+        catch (bytes memory reason) {
             emit HookCallFailed("afterMint1155", reason);
         }
         _inHookMint = false;
@@ -579,11 +590,12 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
 
     /// @notice One-call anti-scam check: does `id` really carry every flag the seller
     ///         claims, and (optionally) does its metadata match what the buyer was shown?
-    function verifyToken(
-        uint256 id,
-        uint256 requiredFlagsMask,
-        bytes32 expectedMetadataHash
-    ) external view override returns (bool ok, uint256 actualFlags, bytes32 actualMetadataHash) {
+    function verifyToken(uint256 id, uint256 requiredFlagsMask, bytes32 expectedMetadataHash)
+        external
+        view
+        override
+        returns (bool ok, uint256 actualFlags, bytes32 actualMetadataHash)
+    {
         if (!_flagsInitialized[id]) return (false, 0, bytes32(0));
         actualFlags = _flags[id];
         actualMetadataHash = _metadataHash[id];
@@ -606,10 +618,12 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         return _balances[id][account];
     }
 
-    function balanceOfBatch(
-        address[] calldata accounts,
-        uint256[] calldata ids
-    ) external view override returns (uint256[] memory) {
+    function balanceOfBatch(address[] calldata accounts, uint256[] calldata ids)
+        external
+        view
+        override
+        returns (uint256[] memory)
+    {
         if (accounts.length != ids.length) revert LengthMismatch();
         uint256[] memory batchBalances = new uint256[](accounts.length);
         for (uint256 i = 0; i < accounts.length; i++) {
@@ -628,22 +642,33 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         string memory override_ = _tokenURIs[id];
         return bytes(override_).length > 0 ? override_ : _uri;
     }
-    function holderCountPerToken(uint256 id) external view returns (uint256) { return _holderCountPerToken[id]; }
+
+    function holderCountPerToken(uint256 id) external view returns (uint256) {
+        return _holderCountPerToken[id];
+    }
 
     /// @notice Returns the total balance of an account across all token IDs.
-    function totalBalanceOf(address account) external view returns (uint256) { return _aggregateBalances[account]; }
+    function totalBalanceOf(address account) external view returns (uint256) {
+        return _aggregateBalances[account];
+    }
 
     // =========================================================================
     //                     IIntegrityToken: tokenStandard
     // =========================================================================
 
-    function tokenStandard() external pure override returns (TokenStandard) { return TokenStandard.ERC1155; }
+    function tokenStandard() external pure override returns (TokenStandard) {
+        return TokenStandard.ERC1155;
+    }
 
     // =========================================================================
     //                     canTransfer (read-only check)
     // =========================================================================
 
-    function canTransfer(address from, address to, uint256 id, uint256 amount) external view returns (bool allowed, string memory reason) {
+    function canTransfer(address from, address to, uint256 id, uint256 amount)
+        external
+        view
+        returns (bool allowed, string memory reason)
+    {
         if (_isPaused()) return (false, "Token is paused");
         if (_balances[id][from] < amount) return (false, "Insufficient balance");
         if (_hasHooks) {
@@ -658,10 +683,8 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     // =========================================================================
 
     function supportsInterface(bytes4 interfaceId) external pure override returns (bool) {
-        return interfaceId == type(IERC1155).interfaceId
-            || interfaceId == type(IIntegrityToken).interfaceId
-            || interfaceId == type(IFlaggedToken).interfaceId
-            || interfaceId == 0x2a55205a // ERC-2981
+        return interfaceId == type(IERC1155).interfaceId || interfaceId == type(IIntegrityToken).interfaceId
+            || interfaceId == type(IFlaggedToken).interfaceId || interfaceId == 0x2a55205a // ERC-2981
             || interfaceId == 0x01ffc9a7; // ERC165
     }
 
@@ -701,8 +724,12 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         bytes memory data
     ) private {
         if (to.code.length > 0) {
-            try IERC1155Receiver(to).onERC1155BatchReceived(operator, from, ids, amounts, data) returns (bytes4 retval) {
-                if (retval != IERC1155Receiver.onERC1155BatchReceived.selector) revert NotERC1155Receiver();
+            try IERC1155Receiver(to).onERC1155BatchReceived(operator, from, ids, amounts, data) returns (
+                bytes4 retval
+            ) {
+                if (retval != IERC1155Receiver.onERC1155BatchReceived.selector) {
+                    revert NotERC1155Receiver();
+                }
             } catch (bytes memory catchReason) {
                 if (catchReason.length == 0) {
                     revert NotERC1155Receiver();

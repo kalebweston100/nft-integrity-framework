@@ -26,7 +26,6 @@ import "./RoyaltyBase.sol";
  *   BURN:     balance check → beforeBurn → balance → afterBurn
  */
 abstract contract HooksERC20Base is IInitializableHooks {
-
     event TokenInitialized(address indexed tokenContract, address indexed factory);
     event AdminTransferred(address indexed oldAdmin, address indexed newAdmin);
 
@@ -101,42 +100,38 @@ abstract contract HooksERC20Base is IInitializableHooks {
 
     function _onBeforeTransfer(address from, address to, uint256 amount) internal virtual {}
 
-    function validateTransfer(
-        address from,
-        address to,
-        uint256 amount
-    ) external view onlyToken returns (bool valid, string memory reason) {
+    function validateTransfer(address from, address to, uint256 amount)
+        external
+        view
+        onlyToken
+        returns (bool valid, string memory reason)
+    {
         return (true, "");
     }
 
     function afterTransfer(address from, address to, uint256 amount) external onlyToken {}
 
-    function onTransferBlocked(
-        address from,
-        address to,
-        uint256 amount,
-        string calldata reason
-    ) external onlyToken {}
+    function onTransferBlocked(address from, address to, uint256 amount, string calldata reason) external onlyToken {}
 
     // =========================================================================
     //                            MINT HOOKS
     // =========================================================================
 
     /// @notice Override _onBeforeMint to add custom pre-mint logic. Return (false, reason) to block.
-    function beforeMint(
-        address to,
-        uint256 amount,
-        bytes calldata data
-    ) external onlyToken returns (bool allowed, string memory reason) {
+    function beforeMint(address to, uint256 amount, bytes calldata data)
+        external
+        onlyToken
+        returns (bool allowed, string memory reason)
+    {
         _beforeMintSettle(to);
         return _onBeforeMint(to, amount, data);
     }
 
-    function _onBeforeMint(
-        address to,
-        uint256 amount,
-        bytes calldata data
-    ) internal virtual returns (bool, string memory) {
+    function _onBeforeMint(address to, uint256 amount, bytes calldata data)
+        internal
+        virtual
+        returns (bool, string memory)
+    {
         return (true, "");
     }
 
@@ -147,18 +142,12 @@ abstract contract HooksERC20Base is IInitializableHooks {
     // =========================================================================
 
     /// @notice Override _onBeforeBurn to add custom pre-burn logic. Return (false, reason) to block.
-    function beforeBurn(
-        address from,
-        uint256 amount
-    ) external onlyToken returns (bool allowed, string memory reason) {
+    function beforeBurn(address from, uint256 amount) external onlyToken returns (bool allowed, string memory reason) {
         _beforeBurnSettle(from);
         return _onBeforeBurn(from, amount);
     }
 
-    function _onBeforeBurn(
-        address from,
-        uint256 amount
-    ) internal virtual returns (bool, string memory) {
+    function _onBeforeBurn(address from, uint256 amount) internal virtual returns (bool, string memory) {
         return (true, "");
     }
 
@@ -173,7 +162,6 @@ abstract contract HooksERC20Base is IInitializableHooks {
  *         Inherit this if you want royalties; use HooksERC20Base if you do not.
  */
 abstract contract HooksERC20 is HooksERC20Base, RoyaltyBase {
-
     event RoyaltiesDistributed(uint256 amount);
 
     uint256 public accumulatedRoyaltiesPerToken;
@@ -193,7 +181,8 @@ abstract contract HooksERC20 is HooksERC20Base, RoyaltyBase {
     }
 
     function _settleHolder(address holder) internal {
-        uint256 earned = (_tokenBalanceOf(holder) * (accumulatedRoyaltiesPerToken - royaltyDebt[holder])) / ROYALTY_PRECISION;
+        uint256 earned =
+            (_tokenBalanceOf(holder) * (accumulatedRoyaltiesPerToken - royaltyDebt[holder])) / ROYALTY_PRECISION;
         _addPending(holder, earned);
         royaltyDebt[holder] = accumulatedRoyaltiesPerToken;
     }
@@ -222,7 +211,8 @@ abstract contract HooksERC20 is HooksERC20Base, RoyaltyBase {
     }
 
     function pendingRoyaltiesFor(address holder) external view returns (uint256) {
-        uint256 unsettled = (_tokenBalanceOf(holder) * (accumulatedRoyaltiesPerToken - royaltyDebt[holder])) / ROYALTY_PRECISION;
+        uint256 unsettled =
+            (_tokenBalanceOf(holder) * (accumulatedRoyaltiesPerToken - royaltyDebt[holder])) / ROYALTY_PRECISION;
         return pendingRoyalties[holder] + unsettled;
     }
 }

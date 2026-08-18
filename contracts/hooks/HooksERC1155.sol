@@ -27,7 +27,6 @@ import "./RoyaltyBase.sol";
  *   BURN:     balance check → beforeBurn1155 → balance → afterBurn1155
  */
 abstract contract HooksERC1155Base is IInitializableHooks {
-
     event TokenInitialized(address indexed tokenContract, address indexed factory);
 
     address public immutable factory;
@@ -98,81 +97,68 @@ abstract contract HooksERC1155Base is IInitializableHooks {
 
     function _onBeforeTransfer1155(address from, address to, uint256 id, uint256 amount) internal virtual {}
 
-    function validateTransfer1155(
-        address from,
-        address to,
-        uint256 id,
-        uint256 amount
-    ) external view onlyToken returns (bool valid, string memory reason) {
+    function validateTransfer1155(address from, address to, uint256 id, uint256 amount)
+        external
+        view
+        onlyToken
+        returns (bool valid, string memory reason)
+    {
         return (true, "");
     }
 
     function afterTransfer1155(address from, address to, uint256 id, uint256 amount) external virtual onlyToken {}
 
-    function onTransferBlocked1155(
-        address from,
-        address to,
-        uint256 id,
-        uint256 amount,
-        string calldata reason
-    ) external onlyToken {}
+    function onTransferBlocked1155(address from, address to, uint256 id, uint256 amount, string calldata reason)
+        external
+        onlyToken
+    {}
 
     // =========================================================================
     //                            MINT HOOKS
     // =========================================================================
 
-    function beforeMint1155(
-        address to,
-        uint256 id,
-        uint256 amount,
-        bytes calldata data
-    ) external onlyToken returns (bool allowed, string memory reason) {
+    function beforeMint1155(address to, uint256 id, uint256 amount, bytes calldata data)
+        external
+        onlyToken
+        returns (bool allowed, string memory reason)
+    {
         _beforeMintSettle(to, id);
         return _onBeforeMint1155(to, id, amount, data);
     }
 
-    function _onBeforeMint1155(
-        address to,
-        uint256 id,
-        uint256 amount,
-        bytes calldata data
-    ) internal virtual returns (bool, string memory) {
+    function _onBeforeMint1155(address to, uint256 id, uint256 amount, bytes calldata data)
+        internal
+        virtual
+        returns (bool, string memory)
+    {
         return (true, "");
     }
 
-    function afterMint1155(
-        address to,
-        uint256 id,
-        uint256 amount,
-        bytes calldata data
-    ) external virtual onlyToken {
+    function afterMint1155(address to, uint256 id, uint256 amount, bytes calldata data) external virtual onlyToken {
         _onAfterMint1155(to, id, amount, data);
     }
 
-    function _onAfterMint1155(
-        address to,
-        uint256 id,
-        uint256 amount,
-        bytes calldata data
-    ) internal virtual {}
+    function _onAfterMint1155(address to, uint256 id, uint256 amount, bytes calldata data) internal virtual {}
 
     /// @notice Called before the token commits/checks a mint's flag bitmap for an id.
     ///         Override to enforce custom flag policy. This hook can only allow/deny —
     ///         it has no access to token storage and cannot write flags itself; only the
     ///         token contract ever writes flag storage.
-    function validateFlags1155(
-        address to,
-        uint256 id,
-        uint256 flags
-    ) external view onlyToken returns (bool allowed, string memory reason) {
+    function validateFlags1155(address to, uint256 id, uint256 flags)
+        external
+        view
+        onlyToken
+        returns (bool allowed, string memory reason)
+    {
         return _onValidateFlags1155(to, id, flags);
     }
 
-    function _onValidateFlags1155(
-        address to,
-        uint256 id,
-        uint256 flags
-    ) internal view virtual returns (bool, string memory) {
+    function _onValidateFlags1155(address to, uint256 id, uint256 flags)
+        internal
+        view
+        virtual
+        returns (bool, string memory)
+    {
         return (true, "");
     }
 
@@ -180,28 +166,24 @@ abstract contract HooksERC1155Base is IInitializableHooks {
     //                            BURN HOOKS
     // =========================================================================
 
-    function beforeBurn1155(
-        address from,
-        uint256 id,
-        uint256 amount
-    ) external onlyToken returns (bool allowed, string memory reason) {
+    function beforeBurn1155(address from, uint256 id, uint256 amount)
+        external
+        onlyToken
+        returns (bool allowed, string memory reason)
+    {
         _beforeBurnSettle(from, id);
         return _onBeforeBurn1155(from, id, amount);
     }
 
-    function _onBeforeBurn1155(
-        address from,
-        uint256 id,
-        uint256 amount
-    ) internal virtual returns (bool, string memory) {
+    function _onBeforeBurn1155(address from, uint256 id, uint256 amount)
+        internal
+        virtual
+        returns (bool, string memory)
+    {
         return (true, "");
     }
 
-    function afterBurn1155(
-        address from,
-        uint256 id,
-        uint256 amount
-    ) external virtual onlyToken {
+    function afterBurn1155(address from, uint256 id, uint256 amount) external virtual onlyToken {
         _onAfterBurn1155(from, id, amount);
     }
 
@@ -211,18 +193,18 @@ abstract contract HooksERC1155Base is IInitializableHooks {
     //                          METADATA HOOKS
     // =========================================================================
 
-    function beforeSetURI(
-        string calldata newUri
-    ) external onlyToken returns (bool allowed, string memory reason) {
+    function beforeSetURI(string calldata newUri) external onlyToken returns (bool allowed, string memory reason) {
         return (true, "");
     }
 
     function afterSetURI(string calldata newUri) external onlyToken {}
 
-    function beforeSetTokenURI1155(
-        uint256,
-        string calldata
-    ) external view onlyToken returns (bool allowed, string memory reason) {
+    function beforeSetTokenURI1155(uint256, string calldata)
+        external
+        view
+        onlyToken
+        returns (bool allowed, string memory reason)
+    {
         return (true, "");
     }
 
@@ -243,7 +225,6 @@ abstract contract HooksERC1155Base is IInitializableHooks {
  * holds (or has held) to ensure a complete payout.
  */
 abstract contract HooksERC1155 is HooksERC1155Base, RoyaltyBase {
-
     event RoyaltiesDistributed(uint256 indexed tokenId, uint256 amount);
 
     /// @notice Whether royalty distribution is active for this deployment.
@@ -291,21 +272,12 @@ abstract contract HooksERC1155 is HooksERC1155Base, RoyaltyBase {
         royaltyDebt[holder][tokenId] = accRate;
     }
 
-    function afterMint1155(
-        address to,
-        uint256 id,
-        uint256 amount,
-        bytes calldata data
-    ) external override onlyToken {
+    function afterMint1155(address to, uint256 id, uint256 amount, bytes calldata data) external override onlyToken {
         if (royaltiesEnabled) _tokenSupplyById[id] += amount;
         _onAfterMint1155(to, id, amount, data);
     }
 
-    function afterBurn1155(
-        address from,
-        uint256 id,
-        uint256 amount
-    ) external override onlyToken {
+    function afterBurn1155(address from, uint256 id, uint256 amount) external override onlyToken {
         if (royaltiesEnabled) _tokenSupplyById[id] -= amount;
         _onAfterBurn1155(from, id, amount);
     }

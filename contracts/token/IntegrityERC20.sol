@@ -50,7 +50,6 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  *   - address(0) hooks = no custom logic, plain token
  */
 contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
-
     // =========================================================================
     //                          EVENTS
     // =========================================================================
@@ -114,7 +113,9 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     //                     CHAIN-OF-TRUST GETTERS
     // =========================================================================
 
-    function hooksContract() external view returns (address) { return address(_hooks); }
+    function hooksContract() external view returns (address) {
+        return address(_hooks);
+    }
 
     // =========================================================================
     //                  ERC-20 ENTRY POINTS (non-virtual, locked)
@@ -127,7 +128,13 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     }
 
     /// @notice Transfer tokens on behalf of another address.
-    function transferFrom(address from, address to, uint256 amount) external override whenNotPaused nonReentrant returns (bool) {
+    function transferFrom(address from, address to, uint256 amount)
+        external
+        override
+        whenNotPaused
+        nonReentrant
+        returns (bool)
+    {
         uint256 currentAllowance = _allowances[from][msg.sender];
         if (currentAllowance < amount) revert InsufficientAllowance();
         _allowances[from][msg.sender] = currentAllowance - amount;
@@ -166,11 +173,7 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     //                   TRANSFER PIPELINE (private, locked)
     // =========================================================================
 
-    function _transferPipeline(
-        address from,
-        address to,
-        uint256 amount
-    ) private {
+    function _transferPipeline(address from, address to, uint256 amount) private {
         // [LOCKED] Sufficient balance check
         if (amount == 0) revert ZeroAmount();
         if (_balances[from] < amount) revert InsufficientBalance();
@@ -202,7 +205,8 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
 
         // [HOOKS - external call, safe] Developer's post-transfer logic
         if (_hasHooks) {
-            try _hooks.afterTransfer(from, to, amount) {} catch (bytes memory reason) {
+            try _hooks.afterTransfer(from, to, amount) {}
+            catch (bytes memory reason) {
                 emit HookCallFailed("afterTransfer", reason);
             }
         }
@@ -240,7 +244,8 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
 
         // [HOOKS - external call, safe] Developer's post-mint logic
         if (_hasHooks) {
-            try _hooks.afterMint(to, amount, data) {} catch (bytes memory reason) {
+            try _hooks.afterMint(to, amount, data) {}
+            catch (bytes memory reason) {
                 emit HookCallFailed("afterMint", reason);
             }
         }
@@ -268,7 +273,8 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
 
         // [HOOKS - external call, safe] Developer's post-burn logic
         if (_hasHooks) {
-            try _hooks.afterBurn(from, amount) {} catch (bytes memory reason) {
+            try _hooks.afterBurn(from, amount) {}
+            catch (bytes memory reason) {
                 emit HookCallFailed("afterBurn", reason);
             }
         }
@@ -304,9 +310,17 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     //                          VIEW FUNCTIONS
     // =========================================================================
 
-    function name() external view returns (string memory) { return _name; }
-    function symbol() external view returns (string memory) { return _symbol; }
-    function totalSupply() external view returns (uint256) { return _totalSupply; }
+    function name() external view returns (string memory) {
+        return _name;
+    }
+
+    function symbol() external view returns (string memory) {
+        return _symbol;
+    }
+
+    function totalSupply() external view returns (uint256) {
+        return _totalSupply;
+    }
 
     function balanceOf(address account) external view override returns (uint256) {
         return _balances[account];
@@ -316,7 +330,9 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         return _allowances[owner][spender];
     }
 
-    function holderCount() external view returns (uint256) { return _holderCount; }
+    function holderCount() external view returns (uint256) {
+        return _holderCount;
+    }
 
     function firstReceivedAt(address account) external view returns (uint256) {
         return _firstReceivedAt[account];
@@ -327,8 +343,7 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     // =========================================================================
 
     function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
-        return interfaceId == type(IERC20).interfaceId
-            || interfaceId == type(IIntegrityToken).interfaceId
+        return interfaceId == type(IERC20).interfaceId || interfaceId == type(IIntegrityToken).interfaceId
             || interfaceId == 0x01ffc9a7; // ERC165
     }
 
@@ -336,14 +351,20 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     //                     IIntegrityToken: tokenStandard
     // =========================================================================
 
-    function tokenStandard() external pure override returns (TokenStandard) { return TokenStandard.ERC20; }
+    function tokenStandard() external pure override returns (TokenStandard) {
+        return TokenStandard.ERC20;
+    }
 
     // =========================================================================
     //                     canTransfer (read-only check)
     // =========================================================================
 
     /// @notice Checks whether a transfer would be allowed without executing it.
-    function canTransfer(address from, address to, uint256 amount) external view returns (bool allowed, string memory reason) {
+    function canTransfer(address from, address to, uint256 amount)
+        external
+        view
+        returns (bool allowed, string memory reason)
+    {
         if (_isPaused()) return (false, "Token is paused");
         if (_balances[from] < amount) return (false, "Insufficient balance");
         if (_hasHooks) {

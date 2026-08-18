@@ -24,7 +24,6 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  *   in subclasses can use the nonReentrant modifier without importing it separately.
  */
 abstract contract RoyaltyBase is ReentrancyGuard {
-
     uint256 internal constant ROYALTY_PRECISION = 1e18;
 
     /// @notice Settled but unclaimed royalties per holder (in wei).

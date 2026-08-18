@@ -19,7 +19,6 @@ import "../interfaces/Errors.sol";
  *   at the IntegrityTokenBase level.
  */
 abstract contract TokenAdmin {
-
     // =========================================================================
     //                        ADMINISTRATIVE EVENTS
     // =========================================================================

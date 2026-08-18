@@ -28,7 +28,6 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  *   - tokenStandard() is left abstract — each concrete token must declare its standard
  */
 abstract contract IntegrityTokenBase is IIntegrityToken, TokenAdmin, ReentrancyGuard {
-
     // =========================================================================
     //                     IMMUTABLE DEPLOYMENT STATE
     // =========================================================================
@@ -52,11 +51,7 @@ abstract contract IntegrityTokenBase is IIntegrityToken, TokenAdmin, ReentrancyG
     /// @param factoryAddr The deploying factory address.
     /// @param admin The initial issuer admin address.
     /// @param initialContractURI Collection-level metadata URI.
-    constructor(
-        address factoryAddr,
-        address admin,
-        string memory initialContractURI
-    ) TokenAdmin(admin) {
+    constructor(address factoryAddr, address admin, string memory initialContractURI) TokenAdmin(admin) {
         if (factoryAddr == address(0)) revert ZeroAddress();
 
         _factory = factoryAddr;
@@ -68,8 +63,13 @@ abstract contract IntegrityTokenBase is IIntegrityToken, TokenAdmin, ReentrancyG
     //                     IIntegrityToken IMPLEMENTATION
     // =========================================================================
 
-    function factory() external view override returns (address) { return _factory; }
-    function isIntegrityToken() external pure override returns (bool) { return true; }
+    function factory() external view override returns (address) {
+        return _factory;
+    }
+
+    function isIntegrityToken() external pure override returns (bool) {
+        return true;
+    }
 
     // tokenStandard() is left abstract — each concrete token must implement it
 
@@ -94,5 +94,7 @@ abstract contract IntegrityTokenBase is IIntegrityToken, TokenAdmin, ReentrancyG
     //                          VIEW FUNCTIONS
     // =========================================================================
 
-    function issuedAt() external view returns (uint256) { return _issuedAt; }
+    function issuedAt() external view returns (uint256) {
+        return _issuedAt;
+    }
 }

@@ -22,35 +22,43 @@ import "../hooks/HooksERC721.sol";
  *   HooksERC721Base and cannot be overridden; test those paths via token-side effects.
  */
 contract TestHooksERC721 is HooksERC721 {
-
     // ─── Call Record Structs ─────────────────────────────────────────────────
 
-    struct TransferRecord { address from; address to; uint256 tokenId; }
-    struct MintRecord     { address to; uint256 tokenId; }
-    struct BurnRecord     { uint256 tokenId; }
+    struct TransferRecord {
+        address from;
+        address to;
+        uint256 tokenId;
+    }
+
+    struct MintRecord {
+        address to;
+        uint256 tokenId;
+    }
+
+    struct BurnRecord {
+        uint256 tokenId;
+    }
 
     // ─── Call Logs ───────────────────────────────────────────────────────────
 
     TransferRecord[] public beforeTransferLog;
-    MintRecord[]     public beforeMintLog;
-    BurnRecord[]     public beforeBurnLog;
+    MintRecord[] public beforeMintLog;
+    BurnRecord[] public beforeBurnLog;
 
     // ─── Behavior Flags ──────────────────────────────────────────────────────
 
-    bool   public revertOnTransfer;
+    bool public revertOnTransfer;
     string public transferRevertReason = "TestHooks: transfer blocked";
 
-    bool   public blockMints;
+    bool public blockMints;
     string public blockMintReason = "TestHooks: mint blocked";
 
-    bool   public blockBurns;
+    bool public blockBurns;
     string public blockBurnReason = "TestHooks: burn blocked";
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
-    constructor(address _factory, address _issuerAdmin)
-        HooksERC721Base(_factory, _issuerAdmin)
-    {}
+    constructor(address _factory, address _issuerAdmin) HooksERC721Base(_factory, _issuerAdmin) {}
 
     // ─── Admin Controls ──────────────────────────────────────────────────────
 
@@ -88,7 +96,11 @@ contract TestHooksERC721 is HooksERC721 {
         address to,
         uint256 tokenId,
         bytes calldata /*data*/
-    ) internal override returns (bool, string memory) {
+    )
+        internal
+        override
+        returns (bool, string memory)
+    {
         beforeMintLog.push(MintRecord(to, tokenId));
         if (blockMints) return (false, blockMintReason);
         return (true, "");
@@ -102,9 +114,17 @@ contract TestHooksERC721 is HooksERC721 {
 
     // ─── View Helpers ─────────────────────────────────────────────────────────
 
-    function beforeTransferCount() external view returns (uint256) { return beforeTransferLog.length; }
-    function beforeMintCount()     external view returns (uint256) { return beforeMintLog.length; }
-    function beforeBurnCount()     external view returns (uint256) { return beforeBurnLog.length; }
+    function beforeTransferCount() external view returns (uint256) {
+        return beforeTransferLog.length;
+    }
+
+    function beforeMintCount() external view returns (uint256) {
+        return beforeMintLog.length;
+    }
+
+    function beforeBurnCount() external view returns (uint256) {
+        return beforeBurnLog.length;
+    }
 
     function lastBeforeTransfer() external view returns (TransferRecord memory) {
         require(beforeTransferLog.length > 0, "No transfers recorded");

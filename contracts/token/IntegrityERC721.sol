@@ -47,7 +47,6 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  *     so marketplaces (e.g. OpenSea via Seaport) trade this token normally
  */
 contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTokenBase {
-
     // =========================================================================
     //                          EVENTS
     // =========================================================================
@@ -132,7 +131,9 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     //                     CHAIN-OF-TRUST GETTERS
     // =========================================================================
 
-    function hooksContract() external view returns (address) { return address(_hooks); }
+    function hooksContract() external view returns (address) {
+        return address(_hooks);
+    }
 
     // =========================================================================
     //                  ERC-721 ENTRY POINTS (non-virtual, locked)
@@ -172,11 +173,7 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     //                   TRANSFER PIPELINE (private, locked)
     // =========================================================================
 
-    function _transferPipeline721(
-        address from,
-        address to,
-        uint256 tokenId
-    ) private {
+    function _transferPipeline721(address from, address to, uint256 tokenId) private {
         // [LOCKED] Ownership validation
         if (_owners[tokenId] != from) revert TokenNotOwned();
         if (to == address(0)) revert ZeroAddress();
@@ -209,7 +206,8 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
 
         // [HOOKS - external call, safe] Developer's post-transfer logic
         if (_hasHooks) {
-            try _hooks.afterTransfer721(from, to, tokenId) {} catch (bytes memory reason) {
+            try _hooks.afterTransfer721(from, to, tokenId) {}
+            catch (bytes memory reason) {
                 emit HookCallFailed("afterTransfer721", reason);
             }
         }
@@ -229,13 +227,12 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     ///                 so it can be verified later via verifyMetadata(). Pass bytes32(0)
     ///                 to skip metadata commitment.
     /// @param data Arbitrary data forwarded to hooks.
-    function mint(
-        address to,
-        uint256 tokenId,
-        uint256 flags,
-        bytes32 metaHash,
-        bytes calldata data
-    ) external onlyIssuerAdmin whenNotPaused nonReentrant {
+    function mint(address to, uint256 tokenId, uint256 flags, bytes32 metaHash, bytes calldata data)
+        external
+        onlyIssuerAdmin
+        whenNotPaused
+        nonReentrant
+    {
         _mintLogic(to, tokenId, flags, metaHash, data);
     }
 
@@ -263,7 +260,8 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
 
         // [HOOKS - external call, safe] Developer's post-burn logic
         if (_hasHooks) {
-            try _hooks.afterBurn721(tokenId) {} catch (bytes memory reason) {
+            try _hooks.afterBurn721(tokenId) {}
+            catch (bytes memory reason) {
                 emit HookCallFailed("afterBurn721", reason);
             }
         }
@@ -291,7 +289,8 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
 
         // [HOOKS - external call, safe] Developer's post-mint logic
         if (_hasHooks) {
-            try _hooks.afterMint721(to, tokenId, data) {} catch (bytes memory reason) {
+            try _hooks.afterMint721(to, tokenId, data) {}
+            catch (bytes memory reason) {
                 emit HookCallFailed("afterMint721", reason);
             }
         }
@@ -334,7 +333,12 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     ///         to avoid circular calls (the hooks contract IS the caller, so its own
     ///         logic already ran before invoking this).
     /// @dev Only callable by the hooks contract. Reverts if no hooks contract is set.
-    function hookMint(address to, uint256 tokenId, uint256 flags, bytes32 metaHash) external override whenNotPaused nonReentrant {
+    function hookMint(address to, uint256 tokenId, uint256 flags, bytes32 metaHash)
+        external
+        override
+        whenNotPaused
+        nonReentrant
+    {
         if (!_hasHooks || msg.sender != address(_hooks)) revert NotHooksContract();
         _mintChecks(to, tokenId);
         _commitFlags(tokenId, flags, metaHash);
@@ -396,11 +400,12 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     ///         seller claims, and (optionally) does its metadata match what the buyer
     ///         was shown? Safe to call before purchasing on any marketplace, since it
     ///         reads the token's permanent on-chain commitment, not any off-chain claim.
-    function verifyToken(
-        uint256 tokenId,
-        uint256 requiredFlagsMask,
-        bytes32 expectedMetadataHash
-    ) external view override returns (bool ok, uint256 actualFlags, bytes32 actualMetadataHash) {
+    function verifyToken(uint256 tokenId, uint256 requiredFlagsMask, bytes32 expectedMetadataHash)
+        external
+        view
+        override
+        returns (bool ok, uint256 actualFlags, bytes32 actualMetadataHash)
+    {
         if (_owners[tokenId] == address(0)) return (false, 0, bytes32(0));
         actualFlags = _flags[tokenId];
         actualMetadataHash = _metadataHash[tokenId];
@@ -429,9 +434,7 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     }
 
     /// @notice ERC-2981 royalty info query.
-    function royaltyInfo(uint256, uint256 salePrice)
-        external view returns (address receiver, uint256 royaltyAmount)
-    {
+    function royaltyInfo(uint256, uint256 salePrice) external view returns (address receiver, uint256 royaltyAmount) {
         receiver = _royaltyReceiver;
         royaltyAmount = (salePrice * _royaltyFeeNumerator) / 10000;
     }
@@ -450,7 +453,8 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         _baseURI = newBaseURI;
 
         if (_hasHooks) {
-            try _hooks.afterSetBaseURI(newBaseURI) {} catch (bytes memory reason) {
+            try _hooks.afterSetBaseURI(newBaseURI) {}
+            catch (bytes memory reason) {
                 emit HookCallFailed("afterSetBaseURI", reason);
             }
         }
@@ -469,7 +473,8 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         _tokenURIs[tokenId] = newTokenURI;
 
         if (_hasHooks) {
-            try _hooks.afterSetTokenURI721(tokenId, newTokenURI) {} catch (bytes memory reason) {
+            try _hooks.afterSetTokenURI721(tokenId, newTokenURI) {}
+            catch (bytes memory reason) {
                 emit HookCallFailed("afterSetTokenURI721", reason);
             }
         }
@@ -510,9 +515,17 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     //                          VIEW FUNCTIONS
     // =========================================================================
 
-    function name() external view returns (string memory) { return _name; }
-    function symbol() external view returns (string memory) { return _symbol; }
-    function totalSupply() external view returns (uint256) { return _totalSupply; }
+    function name() external view returns (string memory) {
+        return _name;
+    }
+
+    function symbol() external view returns (string memory) {
+        return _symbol;
+    }
+
+    function totalSupply() external view returns (uint256) {
+        return _totalSupply;
+    }
 
     function balanceOf(address owner) external view override returns (uint256) {
         if (owner == address(0)) revert ZeroAddress();
@@ -532,7 +545,9 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         return _operatorApprovals[owner][operator];
     }
 
-    function holderCount() external view returns (uint256) { return _holderCount; }
+    function holderCount() external view returns (uint256) {
+        return _holderCount;
+    }
 
     /// @notice Returns the metadata URI for a given token ID.
     ///         Returns the per-token override if set; otherwise falls back to baseURI + tokenId.
@@ -567,25 +582,28 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     // =========================================================================
 
     function supportsInterface(bytes4 interfaceId) external pure override returns (bool) {
-        return interfaceId == type(IERC721).interfaceId
-            || interfaceId == type(IERC721Metadata).interfaceId
-            || interfaceId == type(IIntegrityToken).interfaceId
-            || interfaceId == type(IFlaggedToken).interfaceId
-            || interfaceId == type(IERC2981).interfaceId
-            || interfaceId == type(IERC165).interfaceId;
+        return interfaceId == type(IERC721).interfaceId || interfaceId == type(IERC721Metadata).interfaceId
+            || interfaceId == type(IIntegrityToken).interfaceId || interfaceId == type(IFlaggedToken).interfaceId
+            || interfaceId == type(IERC2981).interfaceId || interfaceId == type(IERC165).interfaceId;
     }
 
     // =========================================================================
     //                     IIntegrityToken: tokenStandard
     // =========================================================================
 
-    function tokenStandard() external pure override returns (TokenStandard) { return TokenStandard.ERC721; }
+    function tokenStandard() external pure override returns (TokenStandard) {
+        return TokenStandard.ERC721;
+    }
 
     // =========================================================================
     //                     canTransfer (read-only check)
     // =========================================================================
 
-    function canTransfer(address from, address to, uint256 tokenId) external view returns (bool allowed, string memory reason) {
+    function canTransfer(address from, address to, uint256 tokenId)
+        external
+        view
+        returns (bool allowed, string memory reason)
+    {
         if (_isPaused()) return (false, "Token is paused");
         if (_hasHooks) {
             (bool valid, string memory validationReason) = _hooks.validateTransfer721(from, to, tokenId);
