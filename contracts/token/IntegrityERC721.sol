@@ -32,17 +32,20 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  *   buyer-facing surface.
  *
  * INHERITS:
- *   IntegrityTokenBase — factory immutable, reentrancy guard, chain-of-trust
- *     getters, IIntegrityToken partial implementation
+ *   IntegrityTokenBase — reentrancy guard, IIntegrityToken partial implementation
  *   TokenAdmin (via Base) — issuer admin, pause/unpause
  *
  * SECURITY:
- *   - Deployed exclusively by the factory via `new`
+ *   - Deployed exclusively by its own hooks contract, via `new`, from inside that
+ *     hooks contract's constructor — there is no separate factory
  *   - transferFrom(), safeTransferFrom(), approve(), setApprovalForAll() are non-virtual
  *   - Transfer pipeline is non-overridable (this contract is not abstract)
  *   - Hooks run via external call — cannot access token storage, so hooks can
  *     gate which flags a mint is allowed to carry but can never write flag storage
- *   - Hooks address is immutable — set at deployment, cannot be changed
+ *   - Hooks address is read from msg.sender at construction time (the deploying
+ *     contract) and stored in a plain, setter-less slot — never immutable, so this
+ *     contract's own runtime bytecode stays byte-identical across every deployment
+ *     regardless of which hooks contract created it. See Codehash.sol.
  *   - Standard ERC-721 transfer/approval surface is untouched by the flags system,
  *     so marketplaces (e.g. OpenSea via Seaport) trade this token normally
  */
@@ -58,12 +61,13 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     event HookCallFailed(string hookName, bytes reason);
 
     // =========================================================================
-    //                     HOOKS CONTRACT (immutable)
+    //                     HOOKS CONTRACT (plain storage, setter-less)
     // =========================================================================
 
-    /// @notice The developer's hooks contract. address(0) = no hooks.
-    HooksERC721Base private immutable _hooks;
-    bool private immutable _hasHooks;
+    /// @notice The hooks contract that deployed and governs this token. Never
+    ///         address(0) — this contract only ever exists because a hooks contract
+    ///         called `new` on it. Deliberately not `immutable`: see contract NatSpec.
+    HooksERC721Base private _hooks;
 
     // =========================================================================
     //                     TOKEN STORAGE
@@ -112,16 +116,13 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     // =========================================================================
 
     constructor(
-        address factoryAddr,
-        address hooksAddr,
         address admin,
         string memory tokenName,
         string memory tokenSymbol,
         string memory initialContractURI,
         string memory baseURI
-    ) IntegrityTokenBase(factoryAddr, admin, initialContractURI) {
-        _hooks = HooksERC721Base(hooksAddr);
-        _hasHooks = hooksAddr != address(0);
+    ) IntegrityTokenBase(admin, initialContractURI) {
+        _hooks = HooksERC721Base(msg.sender);
         _name = tokenName;
         _symbol = tokenSymbol;
         _baseURI = baseURI;
@@ -179,11 +180,9 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         if (to == address(0)) revert ZeroAddress();
 
         // [HOOKS - external call] Developer's pre-transfer and validation logic
-        if (_hasHooks) {
-            _hooks.beforeTransfer721(from, to, tokenId);
-            (bool valid, string memory reason) = _hooks.validateTransfer721(from, to, tokenId);
-            require(valid, reason);
-        }
+        _hooks.beforeTransfer721(from, to, tokenId);
+        (bool valid, string memory reason) = _hooks.validateTransfer721(from, to, tokenId);
+        require(valid, reason);
 
         // [LOCKED] Clear approvals
         delete _tokenApprovals[tokenId];
@@ -205,11 +204,9 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         }
 
         // [HOOKS - external call, safe] Developer's post-transfer logic
-        if (_hasHooks) {
-            try _hooks.afterTransfer721(from, to, tokenId) {}
-            catch (bytes memory reason) {
-                emit HookCallFailed("afterTransfer721", reason);
-            }
+        try _hooks.afterTransfer721(from, to, tokenId) {}
+        catch (bytes memory failReason) {
+            emit HookCallFailed("afterTransfer721", failReason);
         }
     }
 
@@ -242,10 +239,8 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         if (tokenOwner == address(0)) revert NonexistentToken();
 
         // [HOOKS - external call] Developer's pre-burn logic
-        if (_hasHooks) {
-            (bool allowed, string memory reason) = _hooks.beforeBurn721(tokenId);
-            require(allowed, reason);
-        }
+        (bool allowed, string memory reason) = _hooks.beforeBurn721(tokenId);
+        require(allowed, reason);
 
         delete _tokenApprovals[tokenId];
         _balances[tokenOwner] -= 1;
@@ -259,11 +254,9 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         }
 
         // [HOOKS - external call, safe] Developer's post-burn logic
-        if (_hasHooks) {
-            try _hooks.afterBurn721(tokenId) {}
-            catch (bytes memory reason) {
-                emit HookCallFailed("afterBurn721", reason);
-            }
+        try _hooks.afterBurn721(tokenId) {}
+        catch (bytes memory failReason) {
+            emit HookCallFailed("afterBurn721", failReason);
         }
     }
 
@@ -272,15 +265,13 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         _mintChecks(to, tokenId);
 
         // [HOOKS - external call] Developer's pre-mint logic
-        if (_hasHooks) {
-            (bool allowed, string memory reason) = _hooks.beforeMint721(to, tokenId, data);
-            require(allowed, reason);
+        (bool allowed, string memory reason) = _hooks.beforeMint721(to, tokenId, data);
+        require(allowed, reason);
 
-            // [HOOKS - external call] Developer's custom flag policy (allow/deny only —
-            // the hook has no storage access here and cannot write flags itself)
-            (bool flagsAllowed, string memory flagsReason) = _hooks.validateFlags721(to, tokenId, flags);
-            require(flagsAllowed, flagsReason);
-        }
+        // [HOOKS - external call] Developer's custom flag policy (allow/deny only —
+        // the hook has no storage access here and cannot write flags itself)
+        (bool flagsAllowed, string memory flagsReason) = _hooks.validateFlags721(to, tokenId, flags);
+        require(flagsAllowed, flagsReason);
 
         // [LOCKED] Commit flags + metadata hash atomically with mint — never writable again
         _commitFlags(tokenId, flags, metaHash);
@@ -288,11 +279,9 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         _mintBalanceUpdate(to, tokenId);
 
         // [HOOKS - external call, safe] Developer's post-mint logic
-        if (_hasHooks) {
-            try _hooks.afterMint721(to, tokenId, data) {}
-            catch (bytes memory reason) {
-                emit HookCallFailed("afterMint721", reason);
-            }
+        try _hooks.afterMint721(to, tokenId, data) {}
+        catch (bytes memory failReason) {
+            emit HookCallFailed("afterMint721", failReason);
         }
     }
 
@@ -332,23 +321,23 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     ///         metadata hash permanently. Skips beforeMint721/afterMint721 callbacks
     ///         to avoid circular calls (the hooks contract IS the caller, so its own
     ///         logic already ran before invoking this).
-    /// @dev Only callable by the hooks contract. Reverts if no hooks contract is set.
+    /// @dev Only callable by the hooks contract.
     function hookMint(address to, uint256 tokenId, uint256 flags, bytes32 metaHash)
         external
         override
         whenNotPaused
         nonReentrant
     {
-        if (!_hasHooks || msg.sender != address(_hooks)) revert NotHooksContract();
+        if (msg.sender != address(_hooks)) revert NotHooksContract();
         _mintChecks(to, tokenId);
         _commitFlags(tokenId, flags, metaHash);
         _mintBalanceUpdate(to, tokenId);
     }
 
     /// @notice Set a per-token URI initiated by the hooks contract.
-    /// @dev Only callable by the hooks contract. Reverts if no hooks contract is set.
+    /// @dev Only callable by the hooks contract.
     function hookSetTokenURI(uint256 tokenId, string calldata newURI) external override whenNotPaused {
-        if (!_hasHooks || msg.sender != address(_hooks)) revert NotHooksContract();
+        if (msg.sender != address(_hooks)) revert NotHooksContract();
         if (_owners[tokenId] == address(0)) revert NonexistentToken();
         _tokenURIs[tokenId] = newURI;
     }
@@ -445,18 +434,14 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
 
     /// @notice Set the base URI for token metadata. Only callable by issuer admin.
     function setBaseURI(string calldata newBaseURI) external onlyIssuerAdmin {
-        if (_hasHooks) {
-            (bool allowed, string memory reason) = _hooks.beforeSetBaseURI(newBaseURI);
-            require(allowed, reason);
-        }
+        (bool allowed, string memory reason) = _hooks.beforeSetBaseURI(newBaseURI);
+        require(allowed, reason);
 
         _baseURI = newBaseURI;
 
-        if (_hasHooks) {
-            try _hooks.afterSetBaseURI(newBaseURI) {}
-            catch (bytes memory reason) {
-                emit HookCallFailed("afterSetBaseURI", reason);
-            }
+        try _hooks.afterSetBaseURI(newBaseURI) {}
+        catch (bytes memory failReason) {
+            emit HookCallFailed("afterSetBaseURI", failReason);
         }
     }
 
@@ -465,18 +450,14 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     function setTokenURI(uint256 tokenId, string calldata newTokenURI) external onlyIssuerAdmin {
         if (_owners[tokenId] == address(0)) revert NonexistentToken();
 
-        if (_hasHooks) {
-            (bool allowed, string memory reason) = _hooks.beforeSetTokenURI721(tokenId, newTokenURI);
-            require(allowed, reason);
-        }
+        (bool allowed, string memory reason) = _hooks.beforeSetTokenURI721(tokenId, newTokenURI);
+        require(allowed, reason);
 
         _tokenURIs[tokenId] = newTokenURI;
 
-        if (_hasHooks) {
-            try _hooks.afterSetTokenURI721(tokenId, newTokenURI) {}
-            catch (bytes memory reason) {
-                emit HookCallFailed("afterSetTokenURI721", reason);
-            }
+        try _hooks.afterSetTokenURI721(tokenId, newTokenURI) {}
+        catch (bytes memory failReason) {
+            emit HookCallFailed("afterSetTokenURI721", failReason);
         }
     }
 
@@ -605,10 +586,8 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         returns (bool allowed, string memory reason)
     {
         if (_isPaused()) return (false, "Token is paused");
-        if (_hasHooks) {
-            (bool valid, string memory validationReason) = _hooks.validateTransfer721(from, to, tokenId);
-            if (!valid) return (false, validationReason);
-        }
+        (bool valid, string memory validationReason) = _hooks.validateTransfer721(from, to, tokenId);
+        if (!valid) return (false, validationReason);
         return (true, "");
     }
 }

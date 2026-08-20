@@ -1,20 +1,21 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.8.34;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "../interfaces/IHooks.sol";
+import "../token/IntegrityERC20.sol";
 import "./RoyaltyBase.sol";
 
 /**
  * @title HooksERC20Base
  * @notice Abstract base for ERC-20 hooks contracts without built-in royalty distribution.
- *         Provides the full hook framework, access control, and factory initialization.
+ *         Provides the full hook framework, access control, and deploys its own token.
  *         Inherit HooksERC20 instead if you also need the royalty accumulator.
  *
  * DEPLOYMENT FLOW:
- *   1. Deploy MyHooks(factoryAddr, issuerAdmin) inheriting HooksERC20Base or HooksERC20
- *   2. Call factory.deployTokenERC20(myHooksAddr, name, symbol, contractURI)
- *   3. Factory deploys IntegrityERC20 and calls hooks.initializeToken(tokenAddress)
+ *   1. Deploy MyHooks(issuerAdmin, name, symbol, contractURI) inheriting HooksERC20Base
+ *      or HooksERC20 — its constructor deploys the IntegrityERC20 token directly
+ *      (`new IntegrityERC20(...)`) and wires itself as governor. There is no factory
+ *      and no separate initialization step: `token` is set once, synchronously, as
+ *      the return value of `new`.
  *
  * EXTENSION:
  *   Override _onBeforeTransfer / _onBeforeMint / _onBeforeBurn for custom logic.
@@ -25,22 +26,15 @@ import "./RoyaltyBase.sol";
  *   MINT:     beforeMint → balance → afterMint
  *   BURN:     balance check → beforeBurn → balance → afterBurn
  */
-abstract contract HooksERC20Base is IInitializableHooks {
-    event TokenInitialized(address indexed tokenContract, address indexed factory);
+abstract contract HooksERC20Base {
     event AdminTransferred(address indexed oldAdmin, address indexed newAdmin);
 
-    address public immutable factory;
-    address public tokenContract;
-    bool private _initialized;
+    /// @notice The IntegrityERC20 this hooks contract deployed and governs.
+    IntegrityERC20 public immutable token;
     address public issuerAdmin;
 
-    modifier onlyFactory() {
-        require(msg.sender == factory, "Hooks: Not factory");
-        _;
-    }
-
     modifier onlyToken() {
-        require(msg.sender == tokenContract, "Hooks: Not token contract");
+        require(msg.sender == address(token), "Hooks: Not token contract");
         _;
     }
 
@@ -49,19 +43,10 @@ abstract contract HooksERC20Base is IInitializableHooks {
         _;
     }
 
-    constructor(address _factory, address _issuerAdmin) {
-        require(_factory != address(0), "Hooks: Zero factory address");
+    constructor(address _issuerAdmin, string memory tokenName, string memory tokenSymbol, string memory contractURI_) {
         require(_issuerAdmin != address(0), "Hooks: Zero admin address");
-        factory = _factory;
         issuerAdmin = _issuerAdmin;
-    }
-
-    function initializeToken(address _tokenContract) external override onlyFactory {
-        require(!_initialized, "Hooks: Already initialized");
-        require(_tokenContract != address(0), "Hooks: Zero token address");
-        tokenContract = _tokenContract;
-        _initialized = true;
-        emit TokenInitialized(_tokenContract, factory);
+        token = new IntegrityERC20(_issuerAdmin, tokenName, tokenSymbol, contractURI_);
     }
 
     function transferAdmin(address newAdmin) external onlyIssuerAdmin {
@@ -72,11 +57,11 @@ abstract contract HooksERC20Base is IInitializableHooks {
     }
 
     function _tokenBalanceOf(address account) internal view returns (uint256) {
-        return IERC20(tokenContract).balanceOf(account);
+        return token.balanceOf(account);
     }
 
     function _tokenTotalSupply() internal view returns (uint256) {
-        return IERC20(tokenContract).totalSupply();
+        return token.totalSupply();
     }
 
     // Called before beforeTransfer/beforeMint/beforeBurn — no-op here, overridden by HooksERC20
@@ -85,7 +70,7 @@ abstract contract HooksERC20Base is IInitializableHooks {
     function _beforeBurnSettle(address from) internal virtual {}
 
     function _mintFromHooks(address to, uint256 amount) internal {
-        IHookMintERC20(tokenContract).hookMint(to, amount);
+        token.hookMint(to, amount);
     }
 
     // =========================================================================

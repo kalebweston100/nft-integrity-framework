@@ -29,16 +29,18 @@ import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
  *   the id to trustlessly confirm what an item really carries before buying it.
  *
  * INHERITS:
- *   IntegrityTokenBase — factory immutable, reentrancy guard, chain-of-trust
- *     getters, IIntegrityToken partial implementation
+ *   IntegrityTokenBase — reentrancy guard, IIntegrityToken partial implementation
  *   TokenAdmin (via Base) — issuer admin, pause/unpause
  *
  * SECURITY:
- *   - Deployed exclusively by the factory via `new`
+ *   - Deployed exclusively by its own hooks contract, via `new`, from inside that
+ *     hooks contract's constructor
  *   - safeTransferFrom(), safeBatchTransferFrom(), setApprovalForAll() are non-virtual
  *   - Transfer pipeline is non-overridable (this contract is not abstract)
  *   - Hooks run via external call — cannot access token storage
- *   - Hooks address is immutable — set at deployment, cannot be changed
+ *   - Hooks address is read from msg.sender at construction time and stored in a
+ *     plain, setter-less slot — never immutable, so this contract's own runtime
+ *     bytecode stays byte-identical across every deployment. See Codehash.sol.
  */
 contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, IntegrityTokenBase {
     // =========================================================================
@@ -53,12 +55,12 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     event HookCallFailed(string hookName, bytes reason);
 
     // =========================================================================
-    //                     HOOKS CONTRACT (immutable)
+    //                     HOOKS CONTRACT (plain storage, setter-less)
     // =========================================================================
 
-    /// @notice The developer's hooks contract. address(0) = no hooks.
-    HooksERC1155Base private immutable _hooks;
-    bool private immutable _hasHooks;
+    /// @notice The hooks contract that deployed and governs this token. Never
+    ///         address(0). Deliberately not `immutable`: see contract NatSpec.
+    HooksERC1155Base private _hooks;
 
     // =========================================================================
     //                     TOKEN STORAGE
@@ -104,15 +106,10 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     //                          CONSTRUCTOR
     // =========================================================================
 
-    constructor(
-        address factoryAddr,
-        address hooksAddr,
-        address admin,
-        string memory baseTokenURI,
-        string memory initialContractURI
-    ) IntegrityTokenBase(factoryAddr, admin, initialContractURI) {
-        _hooks = HooksERC1155Base(hooksAddr);
-        _hasHooks = hooksAddr != address(0);
+    constructor(address admin, string memory baseTokenURI, string memory initialContractURI)
+        IntegrityTokenBase(admin, initialContractURI)
+    {
+        _hooks = HooksERC1155Base(msg.sender);
         _uri = baseTokenURI;
     }
 
@@ -195,11 +192,9 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         if (to == address(0)) revert ZeroAddress();
 
         // [HOOKS - external call] Developer's pre-transfer and validation logic
-        if (_hasHooks) {
-            _hooks.beforeTransfer1155(from, to, id, amount);
-            (bool valid, string memory reason) = _hooks.validateTransfer1155(from, to, id, amount);
-            require(valid, reason);
-        }
+        _hooks.beforeTransfer1155(from, to, id, amount);
+        (bool valid, string memory reason) = _hooks.validateTransfer1155(from, to, id, amount);
+        require(valid, reason);
 
         // Snapshot pre-transfer state for holder tracking
         bool toWasNewHolder = (_balances[id][to] == 0);
@@ -221,11 +216,9 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         }
 
         // [HOOKS - external call, safe] Developer's post-transfer logic
-        if (_hasHooks) {
-            try _hooks.afterTransfer1155(from, to, id, amount) {}
-            catch (bytes memory reason) {
-                emit HookCallFailed("afterTransfer1155", reason);
-            }
+        try _hooks.afterTransfer1155(from, to, id, amount) {}
+        catch (bytes memory failReason) {
+            emit HookCallFailed("afterTransfer1155", failReason);
         }
     }
 
@@ -272,13 +265,11 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         }
 
         // [HOOKS] Call beforeMint + validateFlags for each token class
-        if (_hasHooks) {
-            for (uint256 i = 0; i < ids.length; i++) {
-                (bool allowed, string memory reason) = _hooks.beforeMint1155(to, ids[i], amounts[i], data);
-                require(allowed, reason);
-                (bool flagsAllowed, string memory flagsReason) = _hooks.validateFlags1155(to, ids[i], flagsArr[i]);
-                require(flagsAllowed, flagsReason);
-            }
+        for (uint256 i = 0; i < ids.length; i++) {
+            (bool allowed, string memory reason) = _hooks.beforeMint1155(to, ids[i], amounts[i], data);
+            require(allowed, reason);
+            (bool flagsAllowed, string memory flagsReason) = _hooks.validateFlags1155(to, ids[i], flagsArr[i]);
+            require(flagsAllowed, flagsReason);
         }
 
         for (uint256 i = 0; i < ids.length; i++) {
@@ -298,12 +289,10 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         emit TransferBatch(msg.sender, address(0), to, ids, amounts);
 
         // [HOOKS, safe] Call afterMint for each token class
-        if (_hasHooks) {
-            for (uint256 i = 0; i < ids.length; i++) {
-                try _hooks.afterMint1155(to, ids[i], amounts[i], data) {}
-                catch (bytes memory reason) {
-                    emit HookCallFailed("afterMint1155", reason);
-                }
+        for (uint256 i = 0; i < ids.length; i++) {
+            try _hooks.afterMint1155(to, ids[i], amounts[i], data) {}
+            catch (bytes memory failReason) {
+                emit HookCallFailed("afterMint1155", failReason);
             }
         }
     }
@@ -314,10 +303,8 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         if (_balances[id][from] < amount) revert InsufficientBalance();
 
         // [HOOKS - external call] Developer's pre-burn logic
-        if (_hasHooks) {
-            (bool allowed, string memory reason) = _hooks.beforeBurn1155(from, id, amount);
-            require(allowed, reason);
-        }
+        (bool allowed, string memory reason) = _hooks.beforeBurn1155(from, id, amount);
+        require(allowed, reason);
 
         _balances[id][from] -= amount;
         _updateAggregateBalances(from, address(0), amount);
@@ -330,11 +317,9 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         }
 
         // [HOOKS - external call, safe] Developer's post-burn logic
-        if (_hasHooks) {
-            try _hooks.afterBurn1155(from, id, amount) {}
-            catch (bytes memory reason) {
-                emit HookCallFailed("afterBurn1155", reason);
-            }
+        try _hooks.afterBurn1155(from, id, amount) {}
+        catch (bytes memory failReason) {
+            emit HookCallFailed("afterBurn1155", failReason);
         }
     }
 
@@ -348,11 +333,9 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         if (ids.length != amounts.length) revert LengthMismatch();
 
         // [HOOKS] Call beforeBurn for each token class
-        if (_hasHooks) {
-            for (uint256 i = 0; i < ids.length; i++) {
-                (bool allowed, string memory reason) = _hooks.beforeBurn1155(from, ids[i], amounts[i]);
-                require(allowed, reason);
-            }
+        for (uint256 i = 0; i < ids.length; i++) {
+            (bool allowed, string memory reason) = _hooks.beforeBurn1155(from, ids[i], amounts[i]);
+            require(allowed, reason);
         }
 
         for (uint256 i = 0; i < ids.length; i++) {
@@ -369,12 +352,10 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         emit TransferBatch(msg.sender, from, address(0), ids, amounts);
 
         // [HOOKS, safe] Call afterBurn for each token class
-        if (_hasHooks) {
-            for (uint256 i = 0; i < ids.length; i++) {
-                try _hooks.afterBurn1155(from, ids[i], amounts[i]) {}
-                catch (bytes memory reason) {
-                    emit HookCallFailed("afterBurn1155", reason);
-                }
+        for (uint256 i = 0; i < ids.length; i++) {
+            try _hooks.afterBurn1155(from, ids[i], amounts[i]) {}
+            catch (bytes memory failReason) {
+                emit HookCallFailed("afterBurn1155", failReason);
             }
         }
     }
@@ -382,37 +363,29 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     /// @notice Set the base URI. Only callable by issuer admin.
     function setURI(string calldata newuri) external onlyIssuerAdmin {
         // [HOOKS - external call] Developer's pre-URI logic
-        if (_hasHooks) {
-            (bool allowed, string memory reason) = _hooks.beforeSetURI(newuri);
-            require(allowed, reason);
-        }
+        (bool allowed, string memory reason) = _hooks.beforeSetURI(newuri);
+        require(allowed, reason);
 
         _uri = newuri;
 
         // [HOOKS - external call, safe] Developer's post-URI logic
-        if (_hasHooks) {
-            try _hooks.afterSetURI(newuri) {}
-            catch (bytes memory reason) {
-                emit HookCallFailed("afterSetURI", reason);
-            }
+        try _hooks.afterSetURI(newuri) {}
+        catch (bytes memory failReason) {
+            emit HookCallFailed("afterSetURI", failReason);
         }
     }
 
     /// @notice Set a per-token-ID URI override. Empty string clears the override,
     ///         reverting to the base URI template for that ID. Only callable by issuer admin.
     function setTokenURI(uint256 id, string calldata newTokenURI) external onlyIssuerAdmin {
-        if (_hasHooks) {
-            (bool allowed, string memory reason) = _hooks.beforeSetTokenURI1155(id, newTokenURI);
-            require(allowed, reason);
-        }
+        (bool allowed, string memory reason) = _hooks.beforeSetTokenURI1155(id, newTokenURI);
+        require(allowed, reason);
 
         _tokenURIs[id] = newTokenURI;
 
-        if (_hasHooks) {
-            try _hooks.afterSetTokenURI1155(id, newTokenURI) {}
-            catch (bytes memory reason) {
-                emit HookCallFailed("afterSetTokenURI1155", reason);
-            }
+        try _hooks.afterSetTokenURI1155(id, newTokenURI) {}
+        catch (bytes memory failReason) {
+            emit HookCallFailed("afterSetTokenURI1155", failReason);
         }
     }
 
@@ -449,14 +422,12 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         if (to == address(0)) revert ZeroAddress();
 
         // [HOOKS - external call] Developer's pre-mint logic
-        if (_hasHooks) {
-            (bool allowed, string memory reason) = _hooks.beforeMint1155(to, id, amount, data);
-            require(allowed, reason);
+        (bool allowed, string memory reason) = _hooks.beforeMint1155(to, id, amount, data);
+        require(allowed, reason);
 
-            // [HOOKS - external call] Developer's custom flag policy (allow/deny only)
-            (bool flagsAllowed, string memory flagsReason) = _hooks.validateFlags1155(to, id, flags);
-            require(flagsAllowed, flagsReason);
-        }
+        // [HOOKS - external call] Developer's custom flag policy (allow/deny only)
+        (bool flagsAllowed, string memory flagsReason) = _hooks.validateFlags1155(to, id, flags);
+        require(flagsAllowed, flagsReason);
 
         // [LOCKED] Commit (or verify consistency of) this id's flags
         _commitOrCheckFlags(id, flags, metaHash);
@@ -472,11 +443,9 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         }
 
         // [HOOKS - external call, safe] Developer's post-mint logic
-        if (_hasHooks) {
-            try _hooks.afterMint1155(to, id, amount, data) {}
-            catch (bytes memory reason) {
-                emit HookCallFailed("afterMint1155", reason);
-            }
+        try _hooks.afterMint1155(to, id, amount, data) {}
+        catch (bytes memory failReason) {
+            emit HookCallFailed("afterMint1155", failReason);
         }
     }
 
@@ -503,14 +472,14 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     ///         flags. Skips beforeMint1155 to avoid circular calls but still invokes
     ///         afterMint1155 (guarded by _inHookMint) so per-tokenId supply tracking in
     ///         HooksERC1155 stays accurate.
-    /// @dev Only callable by the hooks contract. Reverts if no hooks contract is set.
+    /// @dev Only callable by the hooks contract.
     function hookMint(address to, uint256 id, uint256 amount, uint256 flags, bytes32 metaHash)
         external
         override
         whenNotPaused
         nonReentrant
     {
-        if (!_hasHooks || msg.sender != address(_hooks)) revert NotHooksContract();
+        if (msg.sender != address(_hooks)) revert NotHooksContract();
         if (to == address(0)) revert ZeroAddress();
         if (_inHookMint) revert ReentrantHookMint();
 
@@ -538,9 +507,9 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     }
 
     /// @notice Set a per-token-ID URI initiated by the hooks contract.
-    /// @dev Only callable by the hooks contract. Reverts if no hooks contract is set.
+    /// @dev Only callable by the hooks contract.
     function hookSetTokenURI(uint256 id, string calldata newURI) external override whenNotPaused {
-        if (!_hasHooks || msg.sender != address(_hooks)) revert NotHooksContract();
+        if (msg.sender != address(_hooks)) revert NotHooksContract();
         _tokenURIs[id] = newURI;
     }
 
@@ -671,10 +640,8 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     {
         if (_isPaused()) return (false, "Token is paused");
         if (_balances[id][from] < amount) return (false, "Insufficient balance");
-        if (_hasHooks) {
-            (bool valid, string memory validationReason) = _hooks.validateTransfer1155(from, to, id, amount);
-            if (!valid) return (false, validationReason);
-        }
+        (bool valid, string memory validationReason) = _hooks.validateTransfer1155(from, to, id, amount);
+        if (!valid) return (false, validationReason);
         return (true, "");
     }
 

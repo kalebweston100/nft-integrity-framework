@@ -44,10 +44,8 @@ error FlagAlreadyDefined();
 error EmptyFlagLabel();
 error FlagsAlreadyCommitted();
 
-// ─── Factory ─────────────────────────────────────────────────────────────────
+// ─── Ownership / platform fees (HooksFactory) ────────────────────────────────
 error NotOwner();
 error NotPendingOwner();
-error NotIntegrityToken();
-error InsufficientDeployFee();
 error NothingToWithdraw();
 error WithdrawalFailed();

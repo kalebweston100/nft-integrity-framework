@@ -58,7 +58,9 @@ contract TestHooksERC20 is HooksERC20 {
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
-    constructor(address _factory, address _issuerAdmin) HooksERC20Base(_factory, _issuerAdmin) {}
+    constructor(address _issuerAdmin, string memory tokenName, string memory tokenSymbol, string memory contractURI_)
+        HooksERC20Base(_issuerAdmin, tokenName, tokenSymbol, contractURI_)
+    {}
 
     // ─── Admin Controls ──────────────────────────────────────────────────────
 

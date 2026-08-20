@@ -76,7 +76,9 @@ contract TestHooksERC1155 is HooksERC1155 {
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
-    constructor(address _factory, address _issuerAdmin) HooksERC1155(_factory, _issuerAdmin, true) {}
+    constructor(address _issuerAdmin, string memory baseTokenURI, string memory contractURI_)
+        HooksERC1155(_issuerAdmin, baseTokenURI, contractURI_, true)
+    {}
 
     // ─── Admin Controls (global) ─────────────────────────────────────────────
 

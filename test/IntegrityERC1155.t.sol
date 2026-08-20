@@ -15,7 +15,7 @@ contract IntegrityERC1155Test is Fixtures {
     // ─── Mint / transfer / burn happy path ──────────────────────────────────
 
     function test_mint_creditsBalance() public {
-        (,, IntegrityERC1155 token) = _deployERC1155(issuer);
+        (, IntegrityERC1155 token) = _deployERC1155(issuer);
         vm.prank(issuer);
         token.mint(alice, ID, 10, 0, bytes32(0), "");
 
@@ -24,7 +24,7 @@ contract IntegrityERC1155Test is Fixtures {
     }
 
     function test_safeTransferFrom_movesBalance() public {
-        (,, IntegrityERC1155 token) = _deployERC1155(issuer);
+        (, IntegrityERC1155 token) = _deployERC1155(issuer);
         vm.prank(issuer);
         token.mint(alice, ID, 10, 0, bytes32(0), "");
 
@@ -36,7 +36,7 @@ contract IntegrityERC1155Test is Fixtures {
     }
 
     function test_burn_reducesBalance() public {
-        (,, IntegrityERC1155 token) = _deployERC1155(issuer);
+        (, IntegrityERC1155 token) = _deployERC1155(issuer);
         vm.prank(issuer);
         token.mint(alice, ID, 10, 0, bytes32(0), "");
 
@@ -49,7 +49,7 @@ contract IntegrityERC1155Test is Fixtures {
     // ─── Flags: commit on first mint, permanently locked thereafter ────────
 
     function test_secondMintOfSameId_mustMatchCommittedFlags() public {
-        (,, IntegrityERC1155 token) = _deployERC1155(issuer);
+        (, IntegrityERC1155 token) = _deployERC1155(issuer);
         bytes32 metaHash = keccak256("meta-v1");
 
         vm.startPrank(issuer);
@@ -71,20 +71,20 @@ contract IntegrityERC1155Test is Fixtures {
     }
 
     function test_mint_revertsOnUndefinedFlagBits() public {
-        (,, IntegrityERC1155 token) = _deployERC1155(issuer);
+        (, IntegrityERC1155 token) = _deployERC1155(issuer);
         vm.prank(issuer);
         vm.expectRevert(UndefinedFlagBits.selector);
         token.mint(alice, ID, 1, 1 << FLAG_AUTHENTIC, bytes32(0), "");
     }
 
     function test_verifyToken_falseBeforeFirstMint() public {
-        (,, IntegrityERC1155 token) = _deployERC1155(issuer);
+        (, IntegrityERC1155 token) = _deployERC1155(issuer);
         (bool ok,,) = token.verifyToken(ID, 0, bytes32(0));
         assertFalse(ok);
     }
 
     function test_verifyToken_trueAfterCommit() public {
-        (,, IntegrityERC1155 token) = _deployERC1155(issuer);
+        (, IntegrityERC1155 token) = _deployERC1155(issuer);
         bytes32 metaHash = keccak256("meta-v1");
         vm.startPrank(issuer);
         token.defineFlag(FLAG_AUTHENTIC, "Authentic");
@@ -100,7 +100,7 @@ contract IntegrityERC1155Test is Fixtures {
     // ─── Hooks: denial paths (global and per-tokenId) ───────────────────────
 
     function test_hook_canBlockTransferGlobally() public {
-        (, TestHooksERC1155 hooks, IntegrityERC1155 token) = _deployERC1155(issuer);
+        (TestHooksERC1155 hooks, IntegrityERC1155 token) = _deployERC1155(issuer);
         vm.prank(issuer);
         token.mint(alice, ID, 10, 0, bytes32(0), "");
         vm.prank(issuer);
@@ -112,7 +112,7 @@ contract IntegrityERC1155Test is Fixtures {
     }
 
     function test_hook_canBlockMintPerTokenId() public {
-        (, TestHooksERC1155 hooks, IntegrityERC1155 token) = _deployERC1155(issuer);
+        (TestHooksERC1155 hooks, IntegrityERC1155 token) = _deployERC1155(issuer);
         vm.prank(issuer);
         hooks.setBlockMintsById(ID, true, "id restricted");
 
@@ -129,14 +129,14 @@ contract IntegrityERC1155Test is Fixtures {
     // ─── Hooks: cannot bypass core rules ─────────────────────────────────────
 
     function test_hookMint_onlyCallableByHooksContract() public {
-        (,, IntegrityERC1155 token) = _deployERC1155(issuer);
+        (, IntegrityERC1155 token) = _deployERC1155(issuer);
         vm.prank(alice);
         vm.expectRevert(NotHooksContract.selector);
         token.hookMint(alice, ID, 1, 0, bytes32(0));
     }
 
     function test_hookMint_viaHooksContractTracksPerIdSupply() public {
-        (, TestHooksERC1155 hooks, IntegrityERC1155 token) = _deployERC1155(issuer);
+        (TestHooksERC1155 hooks, IntegrityERC1155 token) = _deployERC1155(issuer);
         vm.prank(issuer);
         hooks.issuerMint(alice, ID, 7, 0, bytes32(0));
 
@@ -147,7 +147,7 @@ contract IntegrityERC1155Test is Fixtures {
     // ─── Royalties (pull model, per-tokenId accumulator) ────────────────────
 
     function test_royalties_perTokenIdAccumulator() public {
-        (, TestHooksERC1155 hooks, IntegrityERC1155 token) = _deployERC1155(issuer);
+        (TestHooksERC1155 hooks, IntegrityERC1155 token) = _deployERC1155(issuer);
         vm.startPrank(issuer);
         token.mint(alice, ID, 3, 0, bytes32(0), "");
         token.mint(bob, ID, 1, 0, bytes32(0), "");

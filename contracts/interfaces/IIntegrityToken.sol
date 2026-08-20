@@ -8,9 +8,10 @@ import "./Types.sol";
  * @notice Base interface that ALL tokens in this framework expose, regardless
  *         of token standard (ERC-20, ERC-721, ERC-1155).
  *
- * This interface defines the shared "chain of trust" surface: who deployed the
- * token, which hooks contract (if any) customizes its behavior, and how to tell
- * the standard-specific concrete contract apart from an impostor. Standard-specific
+ * This interface defines the shared surface: which hooks contract governs the
+ * token's behavior (the same contract that deployed it — see IntegrityTokenBase),
+ * and how to tell the standard-specific concrete contract apart from an impostor.
+ * Standard-specific
  * transfer surfaces use the official OpenZeppelin interfaces:
  *   - IERC20   (openzeppelin/contracts/token/ERC20/IERC20.sol)
  *   - IERC721  (openzeppelin/contracts/token/ERC721/IERC721.sol)
@@ -28,10 +29,9 @@ interface IIntegrityToken {
     ///      interaction interface without trial-and-error interface detection.
     function tokenStandard() external pure returns (TokenStandard);
 
-    /// @notice Returns the factory that deployed this token.
-    function factory() external view returns (address);
-
-    /// @notice Returns the hooks contract bound to this token (address(0) if none).
+    /// @notice Returns the hooks contract that deployed and governs this token.
+    ///         Every token has exactly one — it's the contract that called `new`
+    ///         on this token in the first place, so it can never be address(0).
     function hooksContract() external view returns (address);
 
     /// @notice Returns the collection-level metadata URI (e.g., OpenSea contract metadata).

@@ -1,28 +1,30 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.34;
 
-import "../interfaces/ITokenFactory.sol";
 import "../interfaces/Errors.sol";
 
 /**
  * @title HooksFactory
- * @notice Abstract base for factory contracts that deploy tokens using the
- *         Integrity Token Framework's compliance hooks system.
+ * @notice Abstract base for platform contracts that want to charge their own fee for
+ *         deploying hooks+token pairs on behalf of users, on top of this framework's
+ *         hooks contracts (which deploy their own token directly — see
+ *         HooksERC20Base/HooksERC721Base/HooksERC1155Base).
  *
- * Provides two-step ownership, platform fee accumulation/withdrawal, a typed
- * reference to the underlying token factory, and protected helpers for each
- * token standard. The helpers automatically forward the token factory's deploy
- * fee so concrete factories never need to handle the ETH forwarding themselves.
+ * Provides two-step ownership and platform fee accumulation/withdrawal. Deployment
+ * itself needs no helper here: a concrete platform factory just does
+ * `address(new MyHooks(...))`, exactly like deploying any other contract, since the
+ * hooks contract's own constructor deploys its token as a side effect. There is no
+ * separate token-factory deploy fee to forward anymore — a platform wanting a fee
+ * simply requires it directly on its own payable deploy function.
  *
  * USAGE:
- *   contract MyFactory is HooksFactory {
- *       constructor(address tokenFactoryAddr) HooksFactory(tokenFactoryAddr) { ... }
+ *   contract MyPlatform is HooksFactory {
+ *       uint256 public platformDeployFee;
  *
- *       // Make the function payable; the base forwards the fee automatically.
- *       function createThing(...) external payable {
- *           require(msg.value >= deployFee(), "insufficient fee");
- *           address hooksAddr = address(new MyHooks(...));
- *           address token = _deployERC1155Pair(hooksAddr, baseURI, contractURI);
+ *       function createThing(...) external payable returns (address hooksAddr) {
+ *           require(msg.value >= platformDeployFee, "insufficient fee");
+ *           platformFeeBalance += msg.value;
+ *           hooksAddr = address(new MyHooks(...));
  *       }
  *   }
  */
@@ -35,76 +37,13 @@ abstract contract HooksFactory {
     address private _pendingOwner;
     uint256 public platformFeeBalance;
 
-    ITokenFactory public immutable tokenFactory;
-
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
         _;
     }
 
-    constructor(address _tokenFactory) {
-        if (_tokenFactory == address(0)) revert ZeroAddress();
+    constructor() {
         owner = msg.sender;
-        tokenFactory = ITokenFactory(_tokenFactory);
-    }
-
-    // =========================================================================
-    //                       TOKEN DEPLOYMENT HELPERS
-    // =========================================================================
-
-    /// @notice Returns the current per-deploy fee charged by the token factory.
-    /// @dev Concrete factories should expose this (or call it in a payable function)
-    ///      so callers know how much ETH to send.
-    function deployFee() public view returns (uint256) {
-        return tokenFactory.deployFee();
-    }
-
-    /// @notice Deploys an IntegrityERC20 linked to an already-deployed hooks contract.
-    ///         Forwards the token factory's deploy fee automatically.
-    function _deployERC20Pair(
-        address issuerAdmin,
-        address hooksAddr,
-        string memory tokenName,
-        string memory tokenSymbol,
-        string memory contractURI
-    ) internal returns (address token) {
-        if (hooksAddr == address(0)) revert ZeroAddress();
-        uint256 fee = tokenFactory.deployFee();
-        return IFactoryERC20(address(tokenFactory)).deployTokenERC20{value: fee}(
-            issuerAdmin, hooksAddr, tokenName, tokenSymbol, contractURI
-        );
-    }
-
-    /// @notice Deploys an IntegrityERC721 linked to an already-deployed hooks contract.
-    ///         Forwards the token factory's deploy fee automatically.
-    function _deployERC721Pair(
-        address issuerAdmin,
-        address hooksAddr,
-        string memory tokenName,
-        string memory tokenSymbol,
-        string memory contractURI,
-        string memory baseURI
-    ) internal returns (address token) {
-        if (hooksAddr == address(0)) revert ZeroAddress();
-        uint256 fee = tokenFactory.deployFee();
-        return IFactoryERC721(address(tokenFactory)).deployTokenERC721{value: fee}(
-            issuerAdmin, hooksAddr, tokenName, tokenSymbol, contractURI, baseURI
-        );
-    }
-
-    /// @notice Deploys an IntegrityERC1155 linked to an already-deployed hooks contract.
-    ///         Forwards the token factory's deploy fee automatically.
-    function _deployERC1155Pair(
-        address issuerAdmin,
-        address hooksAddr,
-        string memory baseTokenURI,
-        string memory contractURI
-    ) internal returns (address token) {
-        if (hooksAddr == address(0)) revert ZeroAddress();
-        uint256 fee = tokenFactory.deployFee();
-        return IFactoryERC1155(address(tokenFactory)).deployTokenERC1155{value: fee}(
-            issuerAdmin, hooksAddr, baseTokenURI, contractURI
-        );
     }
 
     // =========================================================================

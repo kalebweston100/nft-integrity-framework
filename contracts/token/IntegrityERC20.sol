@@ -23,31 +23,26 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  *   hooks contract has its own storage and CANNOT access or modify token state.
  *
  * INHERITS:
- *   IntegrityTokenBase — factory immutable, reentrancy guard, chain-of-trust
- *     getters, IIntegrityToken partial implementation
+ *   IntegrityTokenBase — reentrancy guard, IIntegrityToken partial implementation
  *   TokenAdmin (via Base) — issuer admin, pause/unpause
  *
  * DEPLOYMENT:
- *   1. Developer deploys their hooks contract (implements ITokenHooks)
- *   2. Developer calls factory.deployTokenERC20(hooksAddress, ...)
- *   3. Factory deploys this IntegrityERC20 with the hooks address
- *   4. Factory registers the token
- *   5. Users interact with THIS contract for all ERC-20 operations
- *
- * CHAIN OF TRUST:
- *   1. token.factory()        → immutable deploying factory
- *   2. token.hooksContract()  → immutable developer hooks (address(0) if none)
- *   3. factory.deployedByFactory(token) → confirms factory deployment
- *   Anyone can verify the full trust chain via these public getters.
+ *   1. Developer deploys their hooks contract (inherits HooksERC20Base or HooksERC20)
+ *   2. That hooks contract's own constructor deploys THIS contract directly via
+ *      `new IntegrityERC20(...)` and wires itself as governor — no factory, no
+ *      separate registration step
+ *   3. Users interact with THIS contract for all ERC-20 operations
  *
  * SECURITY:
- *   - Deployed exclusively by the factory via `new`
+ *   - Deployed exclusively by its own hooks contract, via `new`, from inside that
+ *     hooks contract's constructor
  *   - transfer(), transferFrom(), approve() are non-virtual (concrete contract)
  *   - Transfer pipeline is non-overridable (this contract is not abstract)
  *   - Hooks run via external call — cannot access token storage
  *   - Hooks can only ADD restrictions (revert/return false), not bypass checks
- *   - Hooks address is immutable — set at deployment, cannot be changed
- *   - address(0) hooks = no custom logic, plain token
+ *   - Hooks address is read from msg.sender at construction time and stored in a
+ *     plain, setter-less slot — never immutable, so this contract's own runtime
+ *     bytecode stays byte-identical across every deployment. See Codehash.sol.
  */
 contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     // =========================================================================
@@ -61,15 +56,12 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     event HookCallFailed(string hookName, bytes reason);
 
     // =========================================================================
-    //                     HOOKS CONTRACT (immutable)
+    //                     HOOKS CONTRACT (plain storage, setter-less)
     // =========================================================================
 
-    /// @notice The developer's hooks contract. address(0) = no hooks.
-    /// @dev Immutable — set at deployment, cannot be changed.
-    HooksERC20Base private immutable _hooks;
-
-    /// @notice Whether a hooks contract is set (cached to avoid repeated address(0) checks).
-    bool private immutable _hasHooks;
+    /// @notice The hooks contract that deployed and governs this token. Never
+    ///         address(0). Deliberately not `immutable`: see contract NatSpec.
+    HooksERC20Base private _hooks;
 
     // =========================================================================
     //                     TOKEN STORAGE
@@ -89,22 +81,15 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     //                          CONSTRUCTOR
     // =========================================================================
 
-    /// @notice Deployed by the TokenFactory.
-    /// @param factoryAddr The deploying factory address.
-    /// @param hooksAddr The developer's hooks contract (address(0) for no hooks).
+    /// @notice Deployed by its own hooks contract, via `new`, from inside that
+    ///         contract's constructor.
     /// @param admin The initial issuer admin address.
     /// @param tokenName The token's display name.
     /// @param tokenSymbol The token's ticker symbol.
-    constructor(
-        address factoryAddr,
-        address hooksAddr,
-        address admin,
-        string memory tokenName,
-        string memory tokenSymbol,
-        string memory initialContractURI
-    ) IntegrityTokenBase(factoryAddr, admin, initialContractURI) {
-        _hooks = HooksERC20Base(hooksAddr);
-        _hasHooks = hooksAddr != address(0);
+    constructor(address admin, string memory tokenName, string memory tokenSymbol, string memory initialContractURI)
+        IntegrityTokenBase(admin, initialContractURI)
+    {
+        _hooks = HooksERC20Base(msg.sender);
         _name = tokenName;
         _symbol = tokenSymbol;
     }
@@ -180,11 +165,9 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         if (to == address(0)) revert ZeroAddress();
 
         // [HOOKS - external call] Developer's pre-transfer and validation logic
-        if (_hasHooks) {
-            _hooks.beforeTransfer(from, to, amount);
-            (bool valid, string memory reason) = _hooks.validateTransfer(from, to, amount);
-            require(valid, reason);
-        }
+        _hooks.beforeTransfer(from, to, amount);
+        (bool valid, string memory reason) = _hooks.validateTransfer(from, to, amount);
+        require(valid, reason);
 
         // [LOCKED] Balance mutation
         _balances[from] -= amount;
@@ -204,11 +187,9 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         }
 
         // [HOOKS - external call, safe] Developer's post-transfer logic
-        if (_hasHooks) {
-            try _hooks.afterTransfer(from, to, amount) {}
-            catch (bytes memory reason) {
-                emit HookCallFailed("afterTransfer", reason);
-            }
+        try _hooks.afterTransfer(from, to, amount) {}
+        catch (bytes memory failReason) {
+            emit HookCallFailed("afterTransfer", failReason);
         }
     }
 
@@ -224,10 +205,8 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         if (to == address(0)) revert ZeroAddress();
 
         // [HOOKS - external call] Developer's pre-mint logic
-        if (_hasHooks) {
-            (bool allowed, string memory reason) = _hooks.beforeMint(to, amount, data);
-            require(allowed, reason);
-        }
+        (bool allowed, string memory reason) = _hooks.beforeMint(to, amount, data);
+        require(allowed, reason);
 
         bool wasNewHolder = (_balances[to] == 0);
 
@@ -243,11 +222,9 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         }
 
         // [HOOKS - external call, safe] Developer's post-mint logic
-        if (_hasHooks) {
-            try _hooks.afterMint(to, amount, data) {}
-            catch (bytes memory reason) {
-                emit HookCallFailed("afterMint", reason);
-            }
+        try _hooks.afterMint(to, amount, data) {}
+        catch (bytes memory failReason) {
+            emit HookCallFailed("afterMint", failReason);
         }
     }
 
@@ -256,10 +233,8 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         if (_balances[from] < amount) revert InsufficientBalance();
 
         // [HOOKS - external call] Developer's pre-burn logic
-        if (_hasHooks) {
-            (bool allowed, string memory reason) = _hooks.beforeBurn(from, amount);
-            require(allowed, reason);
-        }
+        (bool allowed, string memory reason) = _hooks.beforeBurn(from, amount);
+        require(allowed, reason);
 
         _balances[from] -= amount;
         _totalSupply -= amount;
@@ -272,11 +247,9 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         }
 
         // [HOOKS - external call, safe] Developer's post-burn logic
-        if (_hasHooks) {
-            try _hooks.afterBurn(from, amount) {}
-            catch (bytes memory reason) {
-                emit HookCallFailed("afterBurn", reason);
-            }
+        try _hooks.afterBurn(from, amount) {}
+        catch (bytes memory failReason) {
+            emit HookCallFailed("afterBurn", failReason);
         }
     }
 
@@ -286,11 +259,11 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
 
     /// @notice Mint tokens initiated by the hooks contract. Skips beforeMint/afterMint
     ///         callbacks to avoid circular calls.
-    /// @dev Only callable by the hooks contract. Reverts if no hooks contract is set.
+    /// @dev Only callable by the hooks contract.
     /// @param to Recipient address.
     /// @param amount Token amount to mint.
     function hookMint(address to, uint256 amount) external override whenNotPaused nonReentrant {
-        if (!_hasHooks || msg.sender != address(_hooks)) revert NotHooksContract();
+        if (msg.sender != address(_hooks)) revert NotHooksContract();
         if (to == address(0)) revert ZeroAddress();
 
         bool wasNewHolder = (_balances[to] == 0);
@@ -367,10 +340,8 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     {
         if (_isPaused()) return (false, "Token is paused");
         if (_balances[from] < amount) return (false, "Insufficient balance");
-        if (_hasHooks) {
-            (bool valid, string memory validationReason) = _hooks.validateTransfer(from, to, amount);
-            if (!valid) return (false, validationReason);
-        }
+        (bool valid, string memory validationReason) = _hooks.validateTransfer(from, to, amount);
+        if (!valid) return (false, validationReason);
         return (true, "");
     }
 }

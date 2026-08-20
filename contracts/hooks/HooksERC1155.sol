@@ -1,20 +1,21 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.8.34;
 
-import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
-import "../interfaces/IHooks.sol";
+import "../token/IntegrityERC1155.sol";
 import "./RoyaltyBase.sol";
 
 /**
  * @title HooksERC1155Base
  * @notice Abstract base for ERC-1155 hooks contracts without built-in royalty distribution.
- *         Provides the full hook framework, access control, and factory initialization.
+ *         Provides the full hook framework, access control, and deploys its own token.
  *         Inherit HooksERC1155 instead if you also need the per-tokenId royalty accumulator.
  *
  * DEPLOYMENT FLOW:
- *   1. Deploy MyHooks(factoryAddr, issuerAdmin) inheriting HooksERC1155Base or HooksERC1155
- *   2. Call factory.deployTokenERC1155(myHooksAddr, baseTokenURI, contractURI)
- *   3. Factory deploys IntegrityERC1155 and calls hooks.initializeToken(tokenAddress)
+ *   1. Deploy MyHooks(issuerAdmin, baseTokenURI, contractURI) inheriting
+ *      HooksERC1155Base or HooksERC1155 — its constructor deploys the IntegrityERC1155
+ *      token directly (`new IntegrityERC1155(...)`) and wires itself as governor.
+ *      There is no factory and no separate initialization step: `token` is set once,
+ *      synchronously, as the return value of `new`.
  *
  * EXTENSION:
  *   Override _onBeforeTransfer1155 / _onBeforeMint1155 / _onBeforeBurn1155 for custom logic.
@@ -26,21 +27,13 @@ import "./RoyaltyBase.sol";
  *   MINT:     beforeMint1155 → validateFlags1155 → flags commit/check → balance → afterMint1155
  *   BURN:     balance check → beforeBurn1155 → balance → afterBurn1155
  */
-abstract contract HooksERC1155Base is IInitializableHooks {
-    event TokenInitialized(address indexed tokenContract, address indexed factory);
-
-    address public immutable factory;
-    address public tokenContract;
-    bool private _initialized;
+abstract contract HooksERC1155Base {
+    /// @notice The IntegrityERC1155 this hooks contract deployed and governs.
+    IntegrityERC1155 public immutable token;
     address public issuerAdmin;
 
-    modifier onlyFactory() {
-        require(msg.sender == factory, "Hooks: Not factory");
-        _;
-    }
-
     modifier onlyToken() {
-        require(msg.sender == tokenContract, "Hooks: Not token contract");
+        require(msg.sender == address(token), "Hooks: Not token contract");
         _;
     }
 
@@ -49,19 +42,10 @@ abstract contract HooksERC1155Base is IInitializableHooks {
         _;
     }
 
-    constructor(address _factory, address _issuerAdmin) {
-        require(_factory != address(0), "Hooks: Zero factory address");
+    constructor(address _issuerAdmin, string memory baseTokenURI, string memory contractURI_) {
         require(_issuerAdmin != address(0), "Hooks: Zero admin address");
-        factory = _factory;
         issuerAdmin = _issuerAdmin;
-    }
-
-    function initializeToken(address _tokenContract) external override onlyFactory {
-        require(!_initialized, "Hooks: Already initialized");
-        require(_tokenContract != address(0), "Hooks: Zero token address");
-        tokenContract = _tokenContract;
-        _initialized = true;
-        emit TokenInitialized(_tokenContract, factory);
+        token = new IntegrityERC1155(_issuerAdmin, baseTokenURI, contractURI_);
     }
 
     function transferAdmin(address newAdmin) external onlyIssuerAdmin {
@@ -70,7 +54,7 @@ abstract contract HooksERC1155Base is IInitializableHooks {
     }
 
     function _tokenBalanceOf(address account, uint256 id) internal view returns (uint256) {
-        return IERC1155(tokenContract).balanceOf(account, id);
+        return token.balanceOf(account, id);
     }
 
     // Called before each hook — no-ops here, overridden by HooksERC1155 to run royalty settlement
@@ -79,11 +63,11 @@ abstract contract HooksERC1155Base is IInitializableHooks {
     function _beforeBurnSettle(address from, uint256 id) internal virtual {}
 
     function _mintFromHooks(address to, uint256 id, uint256 amount, uint256 flags, bytes32 metadataHash) internal {
-        IHookMintERC1155(tokenContract).hookMint(to, id, amount, flags, metadataHash);
+        token.hookMint(to, id, amount, flags, metadataHash);
     }
 
     function _setTokenURIFromHooks(uint256 id, string memory newURI) internal {
-        IHookMintERC1155(tokenContract).hookSetTokenURI(id, newURI);
+        token.hookSetTokenURI(id, newURI);
     }
 
     // =========================================================================
@@ -238,8 +222,8 @@ abstract contract HooksERC1155 is HooksERC1155Base, RoyaltyBase {
 
     mapping(uint256 => uint256) private _tokenSupplyById;
 
-    constructor(address _factory, address _issuerAdmin, bool _royaltiesEnabled)
-        HooksERC1155Base(_factory, _issuerAdmin)
+    constructor(address _issuerAdmin, string memory baseTokenURI, string memory contractURI_, bool _royaltiesEnabled)
+        HooksERC1155Base(_issuerAdmin, baseTokenURI, contractURI_)
     {
         royaltiesEnabled = _royaltiesEnabled;
     }

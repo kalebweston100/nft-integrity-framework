@@ -12,7 +12,7 @@ contract IntegrityERC20Test is Fixtures {
     // ─── Mint / transfer / burn happy path ──────────────────────────────────
 
     function test_mint_creditsBalanceAndTracksHolder() public {
-        (,, IntegrityERC20 token) = _deployERC20(issuer);
+        (, IntegrityERC20 token) = _deployERC20(issuer);
 
         vm.prank(issuer);
         token.mint(alice, 100, "");
@@ -23,7 +23,7 @@ contract IntegrityERC20Test is Fixtures {
     }
 
     function test_transfer_movesBalance() public {
-        (,, IntegrityERC20 token) = _deployERC20(issuer);
+        (, IntegrityERC20 token) = _deployERC20(issuer);
         vm.prank(issuer);
         token.mint(alice, 100, "");
 
@@ -35,14 +35,14 @@ contract IntegrityERC20Test is Fixtures {
     }
 
     function test_transfer_revertsOnInsufficientBalance() public {
-        (,, IntegrityERC20 token) = _deployERC20(issuer);
+        (, IntegrityERC20 token) = _deployERC20(issuer);
         vm.prank(alice);
         vm.expectRevert(InsufficientBalance.selector);
         token.transfer(bob, 1);
     }
 
     function test_transferFrom_revertsOnInsufficientAllowance() public {
-        (,, IntegrityERC20 token) = _deployERC20(issuer);
+        (, IntegrityERC20 token) = _deployERC20(issuer);
         vm.prank(issuer);
         token.mint(alice, 100, "");
 
@@ -52,7 +52,7 @@ contract IntegrityERC20Test is Fixtures {
     }
 
     function test_burn_reducesSupplyAndBalance() public {
-        (,, IntegrityERC20 token) = _deployERC20(issuer);
+        (, IntegrityERC20 token) = _deployERC20(issuer);
         vm.prank(issuer);
         token.mint(alice, 100, "");
 
@@ -66,7 +66,7 @@ contract IntegrityERC20Test is Fixtures {
     // ─── Pause / admin ───────────────────────────────────────────────────────
 
     function test_pause_blocksTransfer() public {
-        (,, IntegrityERC20 token) = _deployERC20(issuer);
+        (, IntegrityERC20 token) = _deployERC20(issuer);
         vm.prank(issuer);
         token.mint(alice, 100, "");
 
@@ -79,7 +79,7 @@ contract IntegrityERC20Test is Fixtures {
     }
 
     function test_onlyIssuerAdmin_canMint() public {
-        (,, IntegrityERC20 token) = _deployERC20(issuer);
+        (, IntegrityERC20 token) = _deployERC20(issuer);
         vm.prank(alice);
         vm.expectRevert(NotIssuerAdmin.selector);
         token.mint(alice, 1, "");
@@ -88,7 +88,7 @@ contract IntegrityERC20Test is Fixtures {
     // ─── Hooks: denial paths ────────────────────────────────────────────────
 
     function test_hook_canBlockTransfer() public {
-        (, TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
+        (TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
         vm.prank(issuer);
         token.mint(alice, 100, "");
 
@@ -111,7 +111,7 @@ contract IntegrityERC20Test is Fixtures {
     }
 
     function test_hook_canBlockMint() public {
-        (, TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
+        (TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
         vm.prank(issuer);
         hooks.setBlockMints(true, "kyc required");
 
@@ -121,7 +121,7 @@ contract IntegrityERC20Test is Fixtures {
     }
 
     function test_hook_canBlockBurn() public {
-        (, TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
+        (TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
         vm.prank(issuer);
         token.mint(alice, 100, "");
         vm.prank(issuer);
@@ -135,21 +135,14 @@ contract IntegrityERC20Test is Fixtures {
     // ─── Hooks: cannot bypass core rules ─────────────────────────────────────
 
     function test_hookMint_onlyCallableByHooksContract() public {
-        (,, IntegrityERC20 token) = _deployERC20(issuer);
+        (, IntegrityERC20 token) = _deployERC20(issuer);
         vm.prank(alice);
         vm.expectRevert(NotHooksContract.selector);
         token.hookMint(alice, 1);
     }
 
-    function test_hookMint_revertsWhenNoHooksConfigured() public {
-        (, IntegrityERC20 token) = _deployERC20NoHooks(issuer);
-        vm.prank(issuer);
-        vm.expectRevert(NotHooksContract.selector);
-        token.hookMint(alice, 1);
-    }
-
     function test_hookMint_viaHooksContractSucceeds() public {
-        (, TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
+        (TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
 
         vm.prank(issuer);
         hooks.issuerMint(alice, 50);
@@ -160,7 +153,7 @@ contract IntegrityERC20Test is Fixtures {
     // ─── Royalties (pull model, balance-weighted) ───────────────────────────
 
     function test_royalties_distributeProRataByBalance() public {
-        (, TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
+        (TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
         vm.prank(issuer);
         token.mint(alice, 75, "");
         vm.prank(issuer);
@@ -173,7 +166,7 @@ contract IntegrityERC20Test is Fixtures {
     }
 
     function test_royalties_claimTransfersEthAndZeroesBalance() public {
-        (, TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
+        (TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
         vm.prank(issuer);
         token.mint(alice, 100, "");
         hooks.distributeRoyalties{value: 1 ether}();

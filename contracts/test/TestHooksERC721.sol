@@ -58,7 +58,13 @@ contract TestHooksERC721 is HooksERC721 {
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
-    constructor(address _factory, address _issuerAdmin) HooksERC721Base(_factory, _issuerAdmin) {}
+    constructor(
+        address _issuerAdmin,
+        string memory tokenName,
+        string memory tokenSymbol,
+        string memory contractURI_,
+        string memory baseURI_
+    ) HooksERC721Base(_issuerAdmin, tokenName, tokenSymbol, contractURI_, baseURI_) {}
 
     // ─── Admin Controls ──────────────────────────────────────────────────────
 

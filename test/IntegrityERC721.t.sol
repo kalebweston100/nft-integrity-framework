@@ -15,7 +15,7 @@ contract IntegrityERC721Test is Fixtures {
     // ─── Mint / transfer / burn happy path ──────────────────────────────────
 
     function test_mint_setsOwnerAndTracksHolder() public {
-        (,, IntegrityERC721 token) = _deployERC721(issuer);
+        (, IntegrityERC721 token) = _deployERC721(issuer);
         vm.prank(issuer);
         token.mint(alice, 1, 0, bytes32(0), "");
 
@@ -25,7 +25,7 @@ contract IntegrityERC721Test is Fixtures {
     }
 
     function test_mint_revertsOnDuplicateTokenId() public {
-        (,, IntegrityERC721 token) = _deployERC721(issuer);
+        (, IntegrityERC721 token) = _deployERC721(issuer);
         vm.startPrank(issuer);
         token.mint(alice, 1, 0, bytes32(0), "");
         vm.expectRevert(TokenAlreadyMinted.selector);
@@ -34,7 +34,7 @@ contract IntegrityERC721Test is Fixtures {
     }
 
     function test_transferFrom_movesOwnership() public {
-        (,, IntegrityERC721 token) = _deployERC721(issuer);
+        (, IntegrityERC721 token) = _deployERC721(issuer);
         vm.prank(issuer);
         token.mint(alice, 1, 0, bytes32(0), "");
 
@@ -45,7 +45,7 @@ contract IntegrityERC721Test is Fixtures {
     }
 
     function test_transferFrom_revertsIfNotOwnerOrApproved() public {
-        (,, IntegrityERC721 token) = _deployERC721(issuer);
+        (, IntegrityERC721 token) = _deployERC721(issuer);
         vm.prank(issuer);
         token.mint(alice, 1, 0, bytes32(0), "");
 
@@ -55,7 +55,7 @@ contract IntegrityERC721Test is Fixtures {
     }
 
     function test_burn_clearsOwnership() public {
-        (,, IntegrityERC721 token) = _deployERC721(issuer);
+        (, IntegrityERC721 token) = _deployERC721(issuer);
         vm.prank(issuer);
         token.mint(alice, 1, 0, bytes32(0), "");
 
@@ -69,7 +69,7 @@ contract IntegrityERC721Test is Fixtures {
     // ─── Flags: append-only registry ────────────────────────────────────────
 
     function test_defineFlag_cannotBeRedefined() public {
-        (,, IntegrityERC721 token) = _deployERC721(issuer);
+        (, IntegrityERC721 token) = _deployERC721(issuer);
         vm.startPrank(issuer);
         token.defineFlag(FLAG_AUTHENTIC, "Authentic");
         vm.expectRevert(FlagAlreadyDefined.selector);
@@ -78,7 +78,7 @@ contract IntegrityERC721Test is Fixtures {
     }
 
     function test_mint_revertsOnUndefinedFlagBits() public {
-        (,, IntegrityERC721 token) = _deployERC721(issuer);
+        (, IntegrityERC721 token) = _deployERC721(issuer);
         vm.prank(issuer);
         vm.expectRevert(UndefinedFlagBits.selector);
         token.mint(alice, 1, 1 << FLAG_AUTHENTIC, bytes32(0), "");
@@ -87,7 +87,7 @@ contract IntegrityERC721Test is Fixtures {
     // ─── Flags: commit-once, permanently immutable ──────────────────────────
 
     function test_mint_commitsFlagsAndMetadataPermanently() public {
-        (,, IntegrityERC721 token) = _deployERC721(issuer);
+        (, IntegrityERC721 token) = _deployERC721(issuer);
         bytes32 metaHash = keccak256("metadata-v1");
 
         vm.startPrank(issuer);
@@ -111,7 +111,7 @@ contract IntegrityERC721Test is Fixtures {
     }
 
     function test_verifyToken_trueOnlyWhenClaimsMatchCommitment() public {
-        (,, IntegrityERC721 token) = _deployERC721(issuer);
+        (, IntegrityERC721 token) = _deployERC721(issuer);
         bytes32 metaHash = keccak256("metadata-v1");
 
         vm.startPrank(issuer);
@@ -132,7 +132,7 @@ contract IntegrityERC721Test is Fixtures {
     }
 
     function test_verifyToken_falseForNonexistentToken() public {
-        (,, IntegrityERC721 token) = _deployERC721(issuer);
+        (, IntegrityERC721 token) = _deployERC721(issuer);
         (bool ok,,) = token.verifyToken(999, 0, bytes32(0));
         assertFalse(ok);
     }
@@ -140,7 +140,7 @@ contract IntegrityERC721Test is Fixtures {
     // ─── Hooks: denial paths ────────────────────────────────────────────────
 
     function test_hook_canBlockTransfer() public {
-        (, TestHooksERC721 hooks, IntegrityERC721 token) = _deployERC721(issuer);
+        (TestHooksERC721 hooks, IntegrityERC721 token) = _deployERC721(issuer);
         vm.prank(issuer);
         token.mint(alice, 1, 0, bytes32(0), "");
         vm.prank(issuer);
@@ -152,7 +152,7 @@ contract IntegrityERC721Test is Fixtures {
     }
 
     function test_hook_canBlockMint() public {
-        (, TestHooksERC721 hooks, IntegrityERC721 token) = _deployERC721(issuer);
+        (TestHooksERC721 hooks, IntegrityERC721 token) = _deployERC721(issuer);
         vm.prank(issuer);
         hooks.setBlockMints(true, "allowlist only");
 
@@ -164,14 +164,14 @@ contract IntegrityERC721Test is Fixtures {
     // ─── Hooks: cannot bypass core rules ─────────────────────────────────────
 
     function test_hookMint_onlyCallableByHooksContract() public {
-        (,, IntegrityERC721 token) = _deployERC721(issuer);
+        (, IntegrityERC721 token) = _deployERC721(issuer);
         vm.prank(alice);
         vm.expectRevert(NotHooksContract.selector);
         token.hookMint(alice, 1, 0, bytes32(0));
     }
 
     function test_hookMint_stillEnforcesFlagDefinitionRule() public {
-        (, TestHooksERC721 hooks,) = _deployERC721(issuer);
+        (TestHooksERC721 hooks,) = _deployERC721(issuer);
         // Even the hook-gated mint path cannot commit undefined flag bits — the
         // token contract enforces this centrally in _commitFlags, not per-caller.
         vm.prank(issuer);
@@ -182,7 +182,7 @@ contract IntegrityERC721Test is Fixtures {
     // ─── ERC-2981 royalties ──────────────────────────────────────────────────
 
     function test_royaltyInfo_reflectsConfiguredFee() public {
-        (,, IntegrityERC721 token) = _deployERC721(issuer);
+        (, IntegrityERC721 token) = _deployERC721(issuer);
         vm.prank(issuer);
         token.setDefaultRoyalty(bob, 500); // 5%
 
@@ -194,7 +194,7 @@ contract IntegrityERC721Test is Fixtures {
     // ─── Royalties (pull model, 1 unit per NFT) ─────────────────────────────
 
     function test_royalties_splitEquallyPerToken() public {
-        (, TestHooksERC721 hooks, IntegrityERC721 token) = _deployERC721(issuer);
+        (TestHooksERC721 hooks, IntegrityERC721 token) = _deployERC721(issuer);
         vm.startPrank(issuer);
         token.mint(alice, 1, 0, bytes32(0), "");
         token.mint(alice, 2, 0, bytes32(0), "");

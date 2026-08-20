@@ -12,7 +12,6 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  * @notice Abstract base for all framework token contracts. Provides the shared
  *         infrastructure that is identical across ERC-20, ERC-721, and ERC-1155:
  *
- *   - Factory immutable + chain-of-trust getters
  *   - Reentrancy guard
  *   - IIntegrityToken partial implementation (isIntegrityToken)
  *   - issuedAt timestamp
@@ -22,19 +21,22 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  *   TokenAdmin — issuer admin, pause/unpause
  *
  * SECURITY:
- *   - Factory is immutable — set at deployment, cannot be changed
  *   - Reentrancy guard protects the transfer/mint pipeline
  *   - All state variables are private with internal accessors where needed
  *   - tokenStandard() is left abstract — each concrete token must declare its standard
+ *
+ * NOTE ON THE HOOKS ADDRESS: each concrete token (IntegrityERC20/721/1155) stores its
+ * own governing hooks-contract address as a plain (non-immutable, non-constant)
+ * storage slot, set exactly once in its own constructor from `msg.sender` — the token
+ * only ever comes into existence via `new` from inside a hooks contract's own
+ * constructor, so `msg.sender` there is always that hooks contract, never spoofable.
+ * There is deliberately no setter anywhere in the token's source. Keeping this out of
+ * `immutable` matters: EXTCODEHASH never includes storage, only code, so a plain
+ * storage slot (unlike an immutable, which gets baked into runtime bytecode as a
+ * literal) keeps every canonical deployment of a given token contract byte-identical
+ * regardless of which hooks contract deployed it — see Codehash.sol.
  */
 abstract contract IntegrityTokenBase is IIntegrityToken, TokenAdmin, ReentrancyGuard {
-    // =========================================================================
-    //                     IMMUTABLE DEPLOYMENT STATE
-    // =========================================================================
-
-    /// @notice The factory that deployed this token.
-    address private immutable _factory;
-
     // =========================================================================
     //                     COLLECTION METADATA
     // =========================================================================
@@ -48,13 +50,9 @@ abstract contract IntegrityTokenBase is IIntegrityToken, TokenAdmin, ReentrancyG
     //                          CONSTRUCTOR
     // =========================================================================
 
-    /// @param factoryAddr The deploying factory address.
     /// @param admin The initial issuer admin address.
     /// @param initialContractURI Collection-level metadata URI.
-    constructor(address factoryAddr, address admin, string memory initialContractURI) TokenAdmin(admin) {
-        if (factoryAddr == address(0)) revert ZeroAddress();
-
-        _factory = factoryAddr;
+    constructor(address admin, string memory initialContractURI) TokenAdmin(admin) {
         _issuedAt = block.timestamp;
         _contractURI = initialContractURI;
     }
@@ -62,10 +60,6 @@ abstract contract IntegrityTokenBase is IIntegrityToken, TokenAdmin, ReentrancyG
     // =========================================================================
     //                     IIntegrityToken IMPLEMENTATION
     // =========================================================================
-
-    function factory() external view override returns (address) {
-        return _factory;
-    }
 
     function isIntegrityToken() external pure override returns (bool) {
         return true;
