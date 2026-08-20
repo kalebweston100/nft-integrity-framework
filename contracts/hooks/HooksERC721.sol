@@ -2,19 +2,17 @@
 pragma solidity ^0.8.34;
 
 import "../token/IntegrityERC721.sol";
-import "./RoyaltyBase.sol";
 
 /**
- * @title HooksERC721Base
- * @notice Abstract base for ERC-721 hooks contracts without built-in royalty distribution.
- *         Provides the full hook framework, access control, and deploys its own token.
- *         Inherit HooksERC721 instead if you also need the royalty accumulator.
+ * @title HooksERC721
+ * @notice Abstract base for ERC-721 hooks contracts. Provides the full hook
+ *         framework, access control, and deploys its own token.
  *
  * DEPLOYMENT FLOW:
  *   1. Deploy MyHooks(issuerAdmin, name, symbol, contractURI, baseURI) inheriting
- *      HooksERC721Base or HooksERC721 — its constructor deploys the IntegrityERC721
- *      token directly (`new IntegrityERC721(...)`) and wires itself as governor.
- *      There is no factory and no separate initialization step: `token` is set once,
+ *      HooksERC721 — its constructor deploys the IntegrityERC721 token directly
+ *      (`new IntegrityERC721(...)`) and wires itself as governor. There is no
+ *      factory and no separate initialization step: `token` is set once,
  *      synchronously, as the return value of `new`.
  *
  * EXTENSION:
@@ -26,7 +24,7 @@ import "./RoyaltyBase.sol";
  *   MINT:     beforeMint721 → validateFlags721 → flags commit → ownership → afterMint721
  *   BURN:     ownership check → beforeBurn721 → ownership → afterBurn721
  */
-abstract contract HooksERC721Base {
+abstract contract HooksERC721 {
     /// @notice The IntegrityERC721 this hooks contract deployed and governs. Immutable
     ///         and set once, in the constructor, as the direct result of `new` — cheap
     ///         to read here since (unlike the token's own hooks-address storage) hooks
@@ -62,23 +60,9 @@ abstract contract HooksERC721Base {
         issuerAdmin = newAdmin;
     }
 
-    function _tokenBalanceOf(address account) internal view returns (uint256) {
-        return token.balanceOf(account);
-    }
-
     function _tokenOwnerOf(uint256 tokenId) internal view returns (address) {
         return token.ownerOf(tokenId);
     }
-
-    function _tokenTotalSupply() internal view returns (uint256) {
-        return token.totalSupply();
-    }
-
-    // Called before each hook — no-op here, overridden by HooksERC721.
-    // _beforeBurnSettle receives tokenId because ownership must be resolved before it clears.
-    function _beforeTransferSettle(address from, address to) internal virtual {}
-    function _beforeMintSettle(address to) internal virtual {}
-    function _beforeBurnSettle(uint256 tokenId) internal virtual {}
 
     function _mintFromHooks(address to, uint256 tokenId, uint256 flags, bytes32 metadataHash) internal {
         token.hookMint(to, tokenId, flags, metadataHash);
@@ -93,7 +77,6 @@ abstract contract HooksERC721Base {
     // =========================================================================
 
     function beforeTransfer721(address from, address to, uint256 tokenId) external onlyToken {
-        _beforeTransferSettle(from, to);
         _onBeforeTransfer721(from, to, tokenId);
     }
 
@@ -124,7 +107,6 @@ abstract contract HooksERC721Base {
         onlyToken
         returns (bool allowed, string memory reason)
     {
-        _beforeMintSettle(to);
         return _onBeforeMint721(to, tokenId, data);
     }
 
@@ -165,7 +147,6 @@ abstract contract HooksERC721Base {
     // =========================================================================
 
     function beforeBurn721(uint256 tokenId) external onlyToken returns (bool allowed, string memory reason) {
-        _beforeBurnSettle(tokenId);
         return _onBeforeBurn721(tokenId);
     }
 
@@ -199,66 +180,4 @@ abstract contract HooksERC721Base {
     }
 
     function afterSetTokenURI721(uint256, string calldata) external onlyToken {}
-}
-
-/**
- * @title HooksERC721
- * @notice HooksERC721Base with built-in pro-rata ETH royalty distribution.
- *         Each NFT counts as one unit. Royalties are settled before each balance change.
- *         Inherit this if you want royalties; use HooksERC721Base if you do not.
- */
-abstract contract HooksERC721 is HooksERC721Base, RoyaltyBase {
-    event RoyaltiesDistributed(uint256 amount);
-
-    uint256 public accumulatedRoyaltiesPerToken;
-    mapping(address => uint256) public royaltyDebt;
-
-    function _beforeTransferSettle(address from, address to) internal override {
-        if (from != address(0)) _settleHolder(from);
-        if (to != address(0)) _settleHolder(to);
-    }
-
-    function _beforeMintSettle(address to) internal override {
-        _settleHolder(to);
-    }
-
-    // Resolves the owner via ownerOf before the token clears ownership on burn.
-    function _beforeBurnSettle(uint256 tokenId) internal override {
-        _settleHolder(_tokenOwnerOf(tokenId));
-    }
-
-    function _settleHolder(address holder) internal {
-        uint256 earned =
-            (_tokenBalanceOf(holder) * (accumulatedRoyaltiesPerToken - royaltyDebt[holder])) / ROYALTY_PRECISION;
-        _addPending(holder, earned);
-        royaltyDebt[holder] = accumulatedRoyaltiesPerToken;
-    }
-
-    function _distributeToAccumulator(uint256 amount) internal {
-        uint256 supply = _tokenTotalSupply();
-        require(supply > 0, "Royalty: no supply");
-        accumulatedRoyaltiesPerToken += (amount * ROYALTY_PRECISION) / supply;
-        totalRoyaltiesDistributed += amount;
-        emit RoyaltiesDistributed(amount);
-    }
-
-    function distributeRoyalties() external payable virtual {
-        require(msg.value > 0, "Royalty: zero amount");
-        _distributeToAccumulator(msg.value);
-    }
-
-    function claimRoyalties() external nonReentrant {
-        _settleHolder(msg.sender);
-        uint256 amount = pendingRoyalties[msg.sender];
-        require(amount > 0, "Royalty: nothing to claim");
-        pendingRoyalties[msg.sender] = 0;
-        emit RoyaltiesClaimed(msg.sender, amount);
-        _sendRoyalties(msg.sender, amount);
-    }
-
-    function pendingRoyaltiesFor(address holder) external view returns (uint256) {
-        uint256 unsettled =
-            (_tokenBalanceOf(holder) * (accumulatedRoyaltiesPerToken - royaltyDebt[holder])) / ROYALTY_PRECISION;
-        return pendingRoyalties[holder] + unsettled;
-    }
 }

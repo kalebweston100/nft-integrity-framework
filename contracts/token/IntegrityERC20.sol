@@ -27,7 +27,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  *   TokenAdmin (via Base) — issuer admin, pause/unpause
  *
  * DEPLOYMENT:
- *   1. Developer deploys their hooks contract (inherits HooksERC20Base or HooksERC20)
+ *   1. Developer deploys their hooks contract (inherits HooksERC20)
  *   2. That hooks contract's own constructor deploys THIS contract directly via
  *      `new IntegrityERC20(...)` and wires itself as governor — no factory, no
  *      separate registration step
@@ -61,7 +61,7 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
 
     /// @notice The hooks contract that deployed and governs this token. Never
     ///         address(0). Deliberately not `immutable`: see contract NatSpec.
-    HooksERC20Base private _hooks;
+    HooksERC20 private _hooks;
 
     // =========================================================================
     //                     TOKEN STORAGE
@@ -89,7 +89,7 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     constructor(address admin, string memory tokenName, string memory tokenSymbol, string memory initialContractURI)
         IntegrityTokenBase(admin, initialContractURI)
     {
-        _hooks = HooksERC20Base(msg.sender);
+        _hooks = HooksERC20(msg.sender);
         _name = tokenName;
         _symbol = tokenSymbol;
     }

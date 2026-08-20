@@ -149,33 +149,4 @@ contract IntegrityERC20Test is Fixtures {
 
         assertEq(token.balanceOf(alice), 50);
     }
-
-    // ─── Royalties (pull model, balance-weighted) ───────────────────────────
-
-    function test_royalties_distributeProRataByBalance() public {
-        (TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
-        vm.prank(issuer);
-        token.mint(alice, 75, "");
-        vm.prank(issuer);
-        token.mint(bob, 25, "");
-
-        hooks.distributeRoyalties{value: 1 ether}();
-
-        assertEq(hooks.pendingRoyaltiesFor(alice), 0.75 ether);
-        assertEq(hooks.pendingRoyaltiesFor(bob), 0.25 ether);
-    }
-
-    function test_royalties_claimTransfersEthAndZeroesBalance() public {
-        (TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
-        vm.prank(issuer);
-        token.mint(alice, 100, "");
-        hooks.distributeRoyalties{value: 1 ether}();
-
-        uint256 before = alice.balance;
-        vm.prank(alice);
-        hooks.claimRoyalties();
-
-        assertEq(alice.balance, before + 1 ether);
-        assertEq(hooks.pendingRoyaltiesFor(alice), 0);
-    }
 }

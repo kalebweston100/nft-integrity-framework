@@ -2,19 +2,17 @@
 pragma solidity ^0.8.34;
 
 import "../token/IntegrityERC1155.sol";
-import "./RoyaltyBase.sol";
 
 /**
- * @title HooksERC1155Base
- * @notice Abstract base for ERC-1155 hooks contracts without built-in royalty distribution.
- *         Provides the full hook framework, access control, and deploys its own token.
- *         Inherit HooksERC1155 instead if you also need the per-tokenId royalty accumulator.
+ * @title HooksERC1155
+ * @notice Abstract base for ERC-1155 hooks contracts. Provides the full hook
+ *         framework, access control, and deploys its own token.
  *
  * DEPLOYMENT FLOW:
  *   1. Deploy MyHooks(issuerAdmin, baseTokenURI, contractURI) inheriting
- *      HooksERC1155Base or HooksERC1155 — its constructor deploys the IntegrityERC1155
- *      token directly (`new IntegrityERC1155(...)`) and wires itself as governor.
- *      There is no factory and no separate initialization step: `token` is set once,
+ *      HooksERC1155 — its constructor deploys the IntegrityERC1155 token directly
+ *      (`new IntegrityERC1155(...)`) and wires itself as governor. There is no
+ *      factory and no separate initialization step: `token` is set once,
  *      synchronously, as the return value of `new`.
  *
  * EXTENSION:
@@ -27,7 +25,7 @@ import "./RoyaltyBase.sol";
  *   MINT:     beforeMint1155 → validateFlags1155 → flags commit/check → balance → afterMint1155
  *   BURN:     balance check → beforeBurn1155 → balance → afterBurn1155
  */
-abstract contract HooksERC1155Base {
+abstract contract HooksERC1155 {
     /// @notice The IntegrityERC1155 this hooks contract deployed and governs.
     IntegrityERC1155 public immutable token;
     address public issuerAdmin;
@@ -53,15 +51,6 @@ abstract contract HooksERC1155Base {
         issuerAdmin = newAdmin;
     }
 
-    function _tokenBalanceOf(address account, uint256 id) internal view returns (uint256) {
-        return token.balanceOf(account, id);
-    }
-
-    // Called before each hook — no-ops here, overridden by HooksERC1155 to run royalty settlement
-    function _beforeTransferSettle(address from, address to, uint256 id) internal virtual {}
-    function _beforeMintSettle(address to, uint256 id) internal virtual {}
-    function _beforeBurnSettle(address from, uint256 id) internal virtual {}
-
     function _mintFromHooks(address to, uint256 id, uint256 amount, uint256 flags, bytes32 metadataHash) internal {
         token.hookMint(to, id, amount, flags, metadataHash);
     }
@@ -75,7 +64,6 @@ abstract contract HooksERC1155Base {
     // =========================================================================
 
     function beforeTransfer1155(address from, address to, uint256 id, uint256 amount) external onlyToken {
-        _beforeTransferSettle(from, to, id);
         _onBeforeTransfer1155(from, to, id, amount);
     }
 
@@ -106,7 +94,6 @@ abstract contract HooksERC1155Base {
         onlyToken
         returns (bool allowed, string memory reason)
     {
-        _beforeMintSettle(to, id);
         return _onBeforeMint1155(to, id, amount, data);
     }
 
@@ -118,7 +105,7 @@ abstract contract HooksERC1155Base {
         return (true, "");
     }
 
-    function afterMint1155(address to, uint256 id, uint256 amount, bytes calldata data) external virtual onlyToken {
+    function afterMint1155(address to, uint256 id, uint256 amount, bytes calldata data) external onlyToken {
         _onAfterMint1155(to, id, amount, data);
     }
 
@@ -155,7 +142,6 @@ abstract contract HooksERC1155Base {
         onlyToken
         returns (bool allowed, string memory reason)
     {
-        _beforeBurnSettle(from, id);
         return _onBeforeBurn1155(from, id, amount);
     }
 
@@ -167,7 +153,7 @@ abstract contract HooksERC1155Base {
         return (true, "");
     }
 
-    function afterBurn1155(address from, uint256 id, uint256 amount) external virtual onlyToken {
+    function afterBurn1155(address from, uint256 id, uint256 amount) external onlyToken {
         _onAfterBurn1155(from, id, amount);
     }
 
@@ -193,118 +179,4 @@ abstract contract HooksERC1155Base {
     }
 
     function afterSetTokenURI1155(uint256, string calldata) external onlyToken {}
-}
-
-/**
- * @title HooksERC1155
- * @notice HooksERC1155Base with optional per-tokenId pro-rata ETH royalty distribution.
- *         Pass `enableRoyalties = true` in the constructor to activate the royalty pool;
- *         pass `false` for a pure hooks contract with no royalty overhead at runtime.
- *
- * Per-tokenId supply is tracked internally via afterMint1155/afterBurn1155 since
- * IntegrityERC1155 only exposes a global totalSupply. Supply tracking is skipped when
- * royalties are disabled.
- *
- * CLAIMING: call claimRoyalties(uint256[] tokenIds) with all tokenIds the caller
- * holds (or has held) to ensure a complete payout.
- */
-abstract contract HooksERC1155 is HooksERC1155Base, RoyaltyBase {
-    event RoyaltiesDistributed(uint256 indexed tokenId, uint256 amount);
-
-    /// @notice Whether royalty distribution is active for this deployment.
-    bool public immutable royaltiesEnabled;
-
-    /// @notice Accumulated royalties per token unit for each tokenId, scaled by ROYALTY_PRECISION.
-    mapping(uint256 => uint256) public accumulatedRoyaltiesPerToken;
-
-    /// @notice Per-holder, per-tokenId snapshot of the accumulator at last settlement.
-    mapping(address => mapping(uint256 => uint256)) public royaltyDebt;
-
-    mapping(uint256 => uint256) private _tokenSupplyById;
-
-    constructor(address _issuerAdmin, string memory baseTokenURI, string memory contractURI_, bool _royaltiesEnabled)
-        HooksERC1155Base(_issuerAdmin, baseTokenURI, contractURI_)
-    {
-        royaltiesEnabled = _royaltiesEnabled;
-    }
-
-    function tokenSupply(uint256 tokenId) external view returns (uint256) {
-        return _tokenSupplyById[tokenId];
-    }
-
-    function _beforeTransferSettle(address from, address to, uint256 id) internal override {
-        if (!royaltiesEnabled) return;
-        if (from != address(0)) _settleHolderForToken(from, id);
-        if (to != address(0)) _settleHolderForToken(to, id);
-    }
-
-    function _beforeMintSettle(address to, uint256 id) internal override {
-        if (!royaltiesEnabled) return;
-        _settleHolderForToken(to, id);
-    }
-
-    function _beforeBurnSettle(address from, uint256 id) internal override {
-        if (!royaltiesEnabled) return;
-        _settleHolderForToken(from, id);
-    }
-
-    function _settleHolderForToken(address holder, uint256 tokenId) internal {
-        uint256 balance = _tokenBalanceOf(holder, tokenId);
-        uint256 accRate = accumulatedRoyaltiesPerToken[tokenId];
-        uint256 earned = (balance * (accRate - royaltyDebt[holder][tokenId])) / ROYALTY_PRECISION;
-        _addPending(holder, earned);
-        royaltyDebt[holder][tokenId] = accRate;
-    }
-
-    function afterMint1155(address to, uint256 id, uint256 amount, bytes calldata data) external override onlyToken {
-        if (royaltiesEnabled) _tokenSupplyById[id] += amount;
-        _onAfterMint1155(to, id, amount, data);
-    }
-
-    function afterBurn1155(address from, uint256 id, uint256 amount) external override onlyToken {
-        if (royaltiesEnabled) _tokenSupplyById[id] -= amount;
-        _onAfterBurn1155(from, id, amount);
-    }
-
-    /// @dev Adds `amount` into the per-tokenId accumulator. Called by distributeRoyalties
-    ///      and by subclass overrides that split off an artist cut first.
-    function _distributeToAccumulator(uint256 tokenId, uint256 amount) internal {
-        uint256 supply = _tokenSupplyById[tokenId];
-        require(supply > 0, "Royalty: no supply for token");
-        accumulatedRoyaltiesPerToken[tokenId] += (amount * ROYALTY_PRECISION) / supply;
-        totalRoyaltiesDistributed += amount;
-        emit RoyaltiesDistributed(tokenId, amount);
-    }
-
-    /// @notice Deposit ETH into the royalty pool for a specific tokenId.
-    function distributeRoyalties(uint256 tokenId) external payable virtual {
-        require(royaltiesEnabled, "Royalty: not enabled");
-        require(msg.value > 0, "Royalty: zero amount");
-        _distributeToAccumulator(tokenId, msg.value);
-    }
-
-    /// @notice Settle and claim royalties across the given tokenIds.
-    function claimRoyalties(uint256[] calldata tokenIds) external nonReentrant {
-        require(royaltiesEnabled, "Royalty: not enabled");
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            _settleHolderForToken(msg.sender, tokenIds[i]);
-        }
-        uint256 amount = pendingRoyalties[msg.sender];
-        require(amount > 0, "Royalty: nothing to claim");
-        pendingRoyalties[msg.sender] = 0;
-        emit RoyaltiesClaimed(msg.sender, amount);
-        _sendRoyalties(msg.sender, amount);
-    }
-
-    /// @notice Returns claimable royalties for a holder across the specified tokenIds.
-    function pendingRoyaltiesFor(address holder, uint256[] calldata tokenIds) external view returns (uint256) {
-        if (!royaltiesEnabled) return 0;
-        uint256 total = pendingRoyalties[holder];
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            uint256 id = tokenIds[i];
-            uint256 balance = _tokenBalanceOf(holder, id);
-            total += (balance * (accumulatedRoyaltiesPerToken[id] - royaltyDebt[holder][id])) / ROYALTY_PRECISION;
-        }
-        return total;
-    }
 }

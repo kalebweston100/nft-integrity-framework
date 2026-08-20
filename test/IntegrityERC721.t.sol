@@ -190,20 +190,4 @@ contract IntegrityERC721Test is Fixtures {
         assertEq(receiver, bob);
         assertEq(amount, 50 ether);
     }
-
-    // ─── Royalties (pull model, 1 unit per NFT) ─────────────────────────────
-
-    function test_royalties_splitEquallyPerToken() public {
-        (TestHooksERC721 hooks, IntegrityERC721 token) = _deployERC721(issuer);
-        vm.startPrank(issuer);
-        token.mint(alice, 1, 0, bytes32(0), "");
-        token.mint(alice, 2, 0, bytes32(0), "");
-        token.mint(bob, 3, 0, bytes32(0), "");
-        vm.stopPrank();
-
-        hooks.distributeRoyalties{value: 3 ether}();
-
-        assertEq(hooks.pendingRoyaltiesFor(alice), 2 ether);
-        assertEq(hooks.pendingRoyaltiesFor(bob), 1 ether);
-    }
 }

@@ -60,7 +60,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
 
     /// @notice The hooks contract that deployed and governs this token. Never
     ///         address(0). Deliberately not `immutable`: see contract NatSpec.
-    HooksERC1155Base private _hooks;
+    HooksERC1155 private _hooks;
 
     // =========================================================================
     //                     TOKEN STORAGE
@@ -109,7 +109,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     constructor(address admin, string memory baseTokenURI, string memory initialContractURI)
         IntegrityTokenBase(admin, initialContractURI)
     {
-        _hooks = HooksERC1155Base(msg.sender);
+        _hooks = HooksERC1155(msg.sender);
         _uri = baseTokenURI;
     }
 

@@ -12,12 +12,11 @@ import "../hooks/HooksERC20.sol";
  *   beforeTransfer  – recorded; optional revert to test transfer blocking
  *   beforeMint      – recorded; optional (false, reason) to test mint blocking
  *   beforeBurn      – recorded; optional (false, reason) to test burn blocking
- *   royalties       – full HooksERC20 accumulator (distribute → settle → claim)
  *   hookMint path   – issuerMint() exercises IntegrityERC20.hookMint()
  *
  * LIMITATIONS:
  *   validateTransfer, afterTransfer, afterMint, afterBurn, onTransferBlocked are
- *   not virtual in HooksERC20Base and cannot be overridden; those paths are tested
+ *   not virtual in HooksERC20 and cannot be overridden; those paths are tested
  *   by observing token-side effects rather than hook-side recording.
  */
 contract TestHooksERC20 is HooksERC20 {
@@ -59,7 +58,7 @@ contract TestHooksERC20 is HooksERC20 {
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     constructor(address _issuerAdmin, string memory tokenName, string memory tokenSymbol, string memory contractURI_)
-        HooksERC20Base(_issuerAdmin, tokenName, tokenSymbol, contractURI_)
+        HooksERC20(_issuerAdmin, tokenName, tokenSymbol, contractURI_)
     {}
 
     // ─── Admin Controls ──────────────────────────────────────────────────────

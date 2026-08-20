@@ -135,29 +135,11 @@ contract IntegrityERC1155Test is Fixtures {
         token.hookMint(alice, ID, 1, 0, bytes32(0));
     }
 
-    function test_hookMint_viaHooksContractTracksPerIdSupply() public {
+    function test_hookMint_viaHooksContract() public {
         (TestHooksERC1155 hooks, IntegrityERC1155 token) = _deployERC1155(issuer);
         vm.prank(issuer);
         hooks.issuerMint(alice, ID, 7, 0, bytes32(0));
 
         assertEq(token.balanceOf(alice, ID), 7);
-        assertEq(hooks.tokenSupply(ID), 7);
-    }
-
-    // ─── Royalties (pull model, per-tokenId accumulator) ────────────────────
-
-    function test_royalties_perTokenIdAccumulator() public {
-        (TestHooksERC1155 hooks, IntegrityERC1155 token) = _deployERC1155(issuer);
-        vm.startPrank(issuer);
-        token.mint(alice, ID, 3, 0, bytes32(0), "");
-        token.mint(bob, ID, 1, 0, bytes32(0), "");
-        vm.stopPrank();
-
-        hooks.distributeRoyalties{value: 4 ether}(ID);
-
-        uint256[] memory ids = new uint256[](1);
-        ids[0] = ID;
-        assertEq(hooks.pendingRoyaltiesFor(alice, ids), 3 ether);
-        assertEq(hooks.pendingRoyaltiesFor(bob, ids), 1 ether);
     }
 }

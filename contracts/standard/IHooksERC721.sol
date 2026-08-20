@@ -22,8 +22,8 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  *
  * OUT OF SCOPE for this base interface: on-chain trait/certification registries
  * (this framework's own `IFlaggedToken`), royalty distribution, and any
- * factory/deployment machinery. Those are additive, framework-specific choices,
- * not part of the minimal hook contract shape.
+ * deployment machinery. Those are additive, framework-specific choices, not
+ * part of the minimal hook contract shape.
  */
 interface IHooksERC721 is IERC165 {
     // =========================================================================

@@ -12,15 +12,14 @@ import "../hooks/HooksERC1155.sol";
  *   beforeTransfer1155  – recorded; optional revert (global or per-tokenId)
  *   afterTransfer1155   – recorded (virtual in base, not overridden by HooksERC1155)
  *   beforeMint1155      – recorded; optional (false, reason) global or per-tokenId
- *   afterMint1155       – recorded via _onAfterMint1155 (supply update runs first)
+ *   afterMint1155       – recorded via _onAfterMint1155
  *   beforeBurn1155      – recorded; optional (false, reason) global or per-tokenId
- *   afterBurn1155       – recorded via _onAfterBurn1155 (supply update runs first)
- *   royalties           – full per-tokenId HooksERC1155 accumulator (distribute → settle → claim)
+ *   afterBurn1155       – recorded via _onAfterBurn1155
  *   hookMint path       – issuerMint() exercises IntegrityERC1155.hookMint()
  *
  * LIMITATIONS:
  *   validateTransfer1155, beforeSetURI, afterSetURI, onTransferBlocked1155 are not
- *   virtual in HooksERC1155Base and cannot be overridden; test those paths via
+ *   virtual in HooksERC1155 and cannot be overridden; test those paths via
  *   token-side effects.
  */
 contract TestHooksERC1155 is HooksERC1155 {
@@ -77,7 +76,7 @@ contract TestHooksERC1155 is HooksERC1155 {
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     constructor(address _issuerAdmin, string memory baseTokenURI, string memory contractURI_)
-        HooksERC1155(_issuerAdmin, baseTokenURI, contractURI_, true)
+        HooksERC1155(_issuerAdmin, baseTokenURI, contractURI_)
     {}
 
     // ─── Admin Controls (global) ─────────────────────────────────────────────
@@ -132,7 +131,8 @@ contract TestHooksERC1155 is HooksERC1155 {
         }
     }
 
-    // afterTransfer1155 is virtual in HooksERC1155Base and not overridden by HooksERC1155.
+    // afterTransfer1155 is virtual in HooksERC1155 (unlike ERC-20/721) so a hooks
+    // author can override it directly for custom post-transfer logic.
     function afterTransfer1155(address from, address to, uint256 id, uint256 amount) external override onlyToken {
         afterTransferLog.push(TransferRecord(from, to, id, amount));
     }

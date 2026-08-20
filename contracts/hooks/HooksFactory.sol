@@ -8,7 +8,7 @@ import "../interfaces/Errors.sol";
  * @notice Abstract base for platform contracts that want to charge their own fee for
  *         deploying hooks+token pairs on behalf of users, on top of this framework's
  *         hooks contracts (which deploy their own token directly — see
- *         HooksERC20Base/HooksERC721Base/HooksERC1155Base).
+ *         HooksERC20/HooksERC721/HooksERC1155).
  *
  * Provides two-step ownership and platform fee accumulation/withdrawal. Deployment
  * itself needs no helper here: a concrete platform factory just does

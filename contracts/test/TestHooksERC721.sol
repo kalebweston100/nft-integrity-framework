@@ -12,14 +12,12 @@ import "../hooks/HooksERC721.sol";
  *   beforeTransfer721  – recorded; optional revert to test transfer blocking
  *   beforeMint721      – recorded; optional (false, reason) to test mint blocking
  *   beforeBurn721      – recorded; optional (false, reason) to test burn blocking
- *   royalties          – full HooksERC721 accumulator (distribute → settle → claim)
- *                        each NFT counts as one unit; settled before every balance change
  *   hookMint path      – issuerMint() exercises IntegrityERC721.hookMint()
  *
  * LIMITATIONS:
  *   validateTransfer721, afterTransfer721, afterMint721, afterBurn721,
  *   beforeSetBaseURI, afterSetBaseURI, onTransferBlocked721 are not virtual in
- *   HooksERC721Base and cannot be overridden; test those paths via token-side effects.
+ *   HooksERC721 and cannot be overridden; test those paths via token-side effects.
  */
 contract TestHooksERC721 is HooksERC721 {
     // ─── Call Record Structs ─────────────────────────────────────────────────
@@ -64,7 +62,7 @@ contract TestHooksERC721 is HooksERC721 {
         string memory tokenSymbol,
         string memory contractURI_,
         string memory baseURI_
-    ) HooksERC721Base(_issuerAdmin, tokenName, tokenSymbol, contractURI_, baseURI_) {}
+    ) HooksERC721(_issuerAdmin, tokenName, tokenSymbol, contractURI_, baseURI_) {}
 
     // ─── Admin Controls ──────────────────────────────────────────────────────
 

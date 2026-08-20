@@ -91,12 +91,6 @@ independent of which hooks contract deployed it.
   atomically and are never writable again by anyone, issuer included.
   `verifyToken(tokenId, requiredFlagsMask, expectedMetadataHash)` gives a
   buyer a single view call to check both before purchasing.
-- **Pull-model royalties (opt-in via `HooksERC*` instead of `HooksERC*Base`).**
-  An accumulator-per-unit design (`RoyaltyBase`) settles each holder's
-  earned share into `pendingRoyalties` at transfer/mint/burn time; holders
-  call `claimRoyalties()` themselves. ERC-721 counts 1 unit/token; ERC-1155
-  runs a separate accumulator per `tokenId` (optional — enabled per-deployment
-  via the hooks constructor); ERC-20 weights by balance.
 - **Permissionless, single-transaction deployment.** Anyone can deploy their
   own hooks contract (`new MyHooks(issuerAdmin, ...)`) and become the issuer
   admin of their own token — the token comes into existence as a side effect
@@ -115,22 +109,22 @@ independent of which hooks contract deployed it.
 
 ## A minimal, standalone hook standard (draft)
 
-Everything above describes this repo's opinionated framework: a permissionless
-factory, an issuer admin, pull-model royalties, on-chain flags. But the one
+Everything above describes this repo's opinionated framework: an issuer admin,
+on-chain flags, hooks contracts that deploy their own token. But the one
 architectural property that actually differentiates the hooks design —
 *a hooks contract is called externally (`CALL`, never `DELEGATECALL`), lives in
 its own storage, and can only deny — never authorize or mutate host state* — is
 currently just an implementation detail of `contracts/interfaces/IHooks.sol`.
-Nothing about that property is specific to this framework's factory, fees, or
-royalty logic, and nothing forces another project's ERC-20/721/1155 to adopt
+Nothing about that property is specific to this framework's admin model or
+flags system, and nothing forces another project's ERC-20/721/1155 to adopt
 any of those to get the same guarantee.
 
 `contracts/standard/` pulls that property out into its own draft interfaces —
-`IHooksERC20`, `IHooksERC721`, `IHooksERC1155` — decoupled from the factory,
-royalty accumulator, and flags system entirely. The goal is a spec small enough
-that *any* token contract can adopt it by adding one immutable hooks address
-and a handful of external calls at the right pipeline points, without adopting
-this repo's factory or deployment model at all.
+`IHooksERC20`, `IHooksERC721`, `IHooksERC1155` — decoupled from the flags
+system and this repo's specific token implementation entirely. The goal is a
+spec small enough that *any* token contract can adopt it by adding one hooks
+address and a handful of external calls at the right pipeline points, without
+adopting this repo's token or deployment model at all.
 
 **Why this is worth pulling out, instead of just being "how this repo happens
 to work":** the common way projects add third-party extensibility to a token —
@@ -166,7 +160,7 @@ NatSpec at the top of `IHooksERC20.sol` for the full text):
 
 **What's deliberately out of scope** of the base interfaces: multi-hook
 composition, on-chain trait/certification registries (this repo's own
-`IFlaggedToken`), royalty distribution, and any factory/deployment machinery.
+`IFlaggedToken`), royalty distribution, and any deployment machinery.
 Composability in particular falls out for free rather than needing to be
 designed in — since a hooks contract is just "any contract implementing the
 interface," a router that fans one call out to several independent, mutually
@@ -176,7 +170,7 @@ same way an ERC-4626 vault can wrap other vaults.
 `contracts/standard/HooksERC20Template.sol` / `HooksERC721Template.sol` /
 `HooksERC1155Template.sol` are minimal reference implementations — copy one,
 override the `_on*` internal hooks, done. They intentionally do **not** depend
-on this repo's own opinionated `HooksERC*Base` (which deploys its token
+on this repo's own opinionated `HooksERC*` (which deploys its token
 directly via `new` — see "Architecture" below); the templates instead solve
 the hooks-needs-the-token's-address-but-deployment-order-is-ambiguous problem
 with a plain one-time `owner`-gated `initialize(token)` call, since the base
@@ -197,7 +191,6 @@ write-up, not as production code.
 | Hooks-deploys-its-own-token, zero-immutable token bytecode | ✅ | ✅ | ✅ |
 | Locked transfer/mint/burn pipeline | ✅ | ✅ | ✅ |
 | Hooks base + before/after/validate | ✅ | ✅ | ✅ |
-| Pull-model royalty accumulator | ✅ | ✅ | ✅ |
 | On-chain flags / `verifyToken` | — (N/A, fungible) | ✅ | ✅ |
 | Pause / issuer admin transfer | ✅ | ✅ | ✅ |
 | ERC-2981 royalty info | — | ✅ | not yet |

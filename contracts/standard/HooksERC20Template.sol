@@ -7,16 +7,19 @@ import "./IHooksERC20.sol";
 /**
  * @title HooksERC20Template
  * @notice DRAFT — minimal starting point for an IHooksERC20-conforming contract,
- *         deliberately decoupled from this repo's factory/royalty/admin machinery.
+ *         deliberately decoupled from this repo's own token/admin machinery.
  *         Copy this file and override the `_on*` hooks; everything else is
  *         boilerplate you get for free (ERC-165, the CALL-only access gate, the
  *         one-time init step).
  *
  * DEPLOYMENT ORDERING: a hooks contract and its token typically need each other's
  * address, but only one can be deployed first. This template resolves that with a
- * one-time `initialize(token)` call gated by `owner`, mirroring the pattern this
- * repo's HooksERC20Base solves via a factory instead — use whichever init story
- * fits your deployment flow; the interface itself doesn't mandate one.
+ * one-time `initialize(token)` call gated by `owner`. This repo's own production
+ * `HooksERC20` solves the same problem differently — its constructor deploys its
+ * token directly via `new`, since it always knows the concrete token type at
+ * compile time, which a template kept deliberately generic cannot assume — but
+ * the interface itself doesn't mandate either approach; use whichever init story
+ * fits your deployment flow.
  *
  *   1. Deploy MyHooks(msg.sender) — owner is set, token is not yet known.
  *   2. Deploy the token, passing MyHooks' address as its immutable hooks address.

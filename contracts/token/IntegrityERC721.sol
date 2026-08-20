@@ -67,7 +67,7 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     /// @notice The hooks contract that deployed and governs this token. Never
     ///         address(0) — this contract only ever exists because a hooks contract
     ///         called `new` on it. Deliberately not `immutable`: see contract NatSpec.
-    HooksERC721Base private _hooks;
+    HooksERC721 private _hooks;
 
     // =========================================================================
     //                     TOKEN STORAGE
@@ -122,7 +122,7 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         string memory initialContractURI,
         string memory baseURI
     ) IntegrityTokenBase(admin, initialContractURI) {
-        _hooks = HooksERC721Base(msg.sender);
+        _hooks = HooksERC721(msg.sender);
         _name = tokenName;
         _symbol = tokenSymbol;
         _baseURI = baseURI;
