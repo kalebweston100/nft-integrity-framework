@@ -23,8 +23,8 @@ This project is a source library, like OpenZeppelin Contracts — not a
 hosted service. There is no canonical deployment maintained by anyone, no
 admin key held by the framework's authors, and no on-chain registry to keep
 up. Each developer compiles the contracts and deploys their **own** hooks
-contract (inheriting `HooksERC20`/`721`/`1155` or the `*Base` variants),
-which deploys and owns its own token outright. What travels with a release
+contract (inheriting `HooksERC20`/`721`/`1155`), which deploys and owns its
+own token outright. What travels with a release
 is the source and the token contracts' canonical bytecode hash, so anyone
 can independently confirm a given token deployment is genuine — see
 "Verifying a deployment" below.
@@ -39,6 +39,22 @@ pipeline; the hooks contract is a separate deployment that the token calls
 externally and can only **add** restrictions (return `false` from a
 `validate*` call) — it has no path to mutate balances, ownership, or the
 flags registry directly.
+
+The common way projects add third-party extensibility to a token — Diamond
+facets, Safe-style modules — wires the extension in via `delegatecall`, so
+the extension runs inside the *host's own* storage context. That's a large
+share of why module-related exploits happen: a buggy or malicious module
+doesn't just get to say yes/no, it gets to touch everything. This framework
+instead makes non-authority a property of the calling convention itself —
+plain external `CALL`, never `DELEGATECALL` — not something enforced by
+review discipline. The closest prior art, ERC-1404 ("Simple Restricted
+Token"), gets partway there but puts the restriction logic inside the token
+contract itself — there's no separate deployment and nothing stopping the
+token author from having that same function quietly mutate balances on the
+side. ERC-3643's compliance modules are closer but are typically routed
+through one trusted `Compliance` contract, not a pattern that pins down
+`CALL`-only invocation or requires ERC-165 discovery of conformance the way
+`HooksERC20`/`721`/`1155` do (see "Core concepts" below).
 
 ## Architecture
 
@@ -97,92 +113,21 @@ independent of which hooks contract deployed it.
   of that same transaction, no separate deploy call, no factory instance to
   stand up first. Nothing here is shared across developers — see
   "Distribution model" above.
-- **Optional `HooksFactory` convenience base.** A developer building a
-  product on top of this framework (e.g. "mint NFTs on deposit") often wants
-  their own contract to charge a platform-level fee for deploying hooks+token
-  pairs on behalf of users. `contracts/hooks/HooksFactory.sol` is an abstract
-  base for exactly that: two-step ownership and a platform fee accumulator —
-  a concrete platform contract just does `address(new MyHooks(...))` in its
-  own payable function, since deploying the hooks contract already deploys
-  the token. It's purely additive — nothing in the core framework depends on
-  it, and skipping it changes nothing about the guarantees above.
-
-## A minimal, standalone hook standard (draft)
-
-Everything above describes this repo's opinionated framework: an issuer admin,
-on-chain flags, hooks contracts that deploy their own token. But the one
-architectural property that actually differentiates the hooks design —
-*a hooks contract is called externally (`CALL`, never `DELEGATECALL`), lives in
-its own storage, and can only deny — never authorize or mutate host state* — is
-currently just an implementation detail of `contracts/interfaces/IHooks.sol`.
-Nothing about that property is specific to this framework's admin model or
-flags system, and nothing forces another project's ERC-20/721/1155 to adopt
-any of those to get the same guarantee.
-
-`contracts/standard/` pulls that property out into its own draft interfaces —
-`IHooksERC20`, `IHooksERC721`, `IHooksERC1155` — decoupled from the flags
-system and this repo's specific token implementation entirely. The goal is a
-spec small enough that *any* token contract can adopt it by adding one hooks
-address and a handful of external calls at the right pipeline points, without
-adopting this repo's token or deployment model at all.
-
-**Why this is worth pulling out, instead of just being "how this repo happens
-to work":** the common way projects add third-party extensibility to a token —
-Diamond facets, Safe-style modules — wires the extension in via `delegatecall`,
-so the extension runs inside the *host's own* storage context. That's a large
-share of why module-related exploits happen: a buggy or malicious module
-doesn't just get to say yes/no, it gets to touch everything. `IHooksERC*`
-instead makes non-authority a property of the calling convention itself, not
-something enforced by review discipline. The closest prior art, ERC-1404
-("Simple Restricted Token"), gets partway there but puts the restriction logic
-inside the token contract itself — there's no separate deployment and nothing
-stopping the token author from having that same function quietly mutate
-balances on the side. ERC-3643's compliance modules are closer but are
-typically routed through one trusted `Compliance` contract, not a spec that
-pins down `CALL`-only invocation or requires ERC-165 discovery of conformance.
-
-**Normative rules the draft interfaces assume of a conforming host** (see the
-NatSpec at the top of `IHooksERC20.sol` for the full text):
-
-1. The host **MUST** invoke the hooks contract via a plain external `CALL` —
-   never `DELEGATECALL`. This is what makes storage isolation a guarantee
-   rather than a convention.
-2. `before*` / `validate*` **MUST** be called unprotected — a revert or a
-   `(false, reason)` return **MUST** block the action (fail-closed: hooks can
-   authoritatively deny).
-3. `after*` **MUST** be called inside a try/catch by the host — a bug or
-   revert here **MUST NOT** be able to brick the host (fail-open: after-hooks
-   are informational only and cannot deny after the fact).
-4. A conforming hooks contract **MUST** return `true` from
-   `supportsInterface(type(IHooksERC*).interfaceId)` (ERC-165), so a host,
-   indexer, or marketplace can confirm conformance from the hooks address
-   alone before wiring it up or trusting it.
-
-**What's deliberately out of scope** of the base interfaces: multi-hook
-composition, on-chain trait/certification registries (this repo's own
-`IFlaggedToken`), royalty distribution, and any deployment machinery.
-Composability in particular falls out for free rather than needing to be
-designed in — since a hooks contract is just "any contract implementing the
-interface," a router that fans one call out to several independent, mutually
-untrusted sub-hooks is itself just another `IHooksERC*` implementation, the
-same way an ERC-4626 vault can wrap other vaults.
-
-`contracts/standard/HooksERC20Template.sol` / `HooksERC721Template.sol` /
-`HooksERC1155Template.sol` are minimal reference implementations — copy one,
-override the `_on*` internal hooks, done. They intentionally do **not** depend
-on this repo's own opinionated `HooksERC*` (which deploys its token
-directly via `new` — see "Architecture" below); the templates instead solve
-the hooks-needs-the-token's-address-but-deployment-order-is-ambiguous problem
-with a plain one-time `owner`-gated `initialize(token)` call, since the base
-interfaces don't mandate any particular deployment story.
-
-**Status:** this is a draft proposal living alongside the framework for
-illustration and feedback, not yet an EIP and not yet wired into
-`IntegrityERC20`/`721`/`1155`'s actual pipeline — those still use the
-framework-specific `contracts/interfaces/IHooks.sol` (which additionally
-carries hook-mint plumbing that's out of scope for a minimal standard).
-Treat `contracts/standard/` as a concrete starting point for an EIP
-write-up, not as production code.
+- **Standardized, ERC-165-discoverable hook interface.** `HooksERC20`,
+  `HooksERC721`, and `HooksERC1155` each implement a small interface —
+  `IHooksERC20`/`IHooksERC721`/`IHooksERC1155` in `contracts/interfaces/` —
+  covering just the CALL-only, fail-closed/fail-open transfer/mint/burn hook
+  shape (not flags, not admin, not hook-mint plumbing — those are additive
+  surface beyond what the interface requires). `onlyToken` access control
+  means nothing but the governed token can actually call these functions, so
+  the interface's value isn't enabling third-party calls — it's discovery:
+  `supportsInterface(type(IHooksERC721).interfaceId)` lets a marketplace,
+  indexer, or buyer confirm a hooks address follows this calling convention
+  before trusting the token it governs, without reading source or trusting
+  an off-chain claim. A conforming hooks contract always deploys a
+  brand-new token as part of its own deployment — this is deliberately not
+  a retrofit mechanism; there's no path to bolt hooks onto a token that
+  already exists.
 
 ## What's implemented
 
@@ -191,6 +136,7 @@ write-up, not as production code.
 | Hooks-deploys-its-own-token, zero-immutable token bytecode | ✅ | ✅ | ✅ |
 | Locked transfer/mint/burn pipeline | ✅ | ✅ | ✅ |
 | Hooks base + before/after/validate | ✅ | ✅ | ✅ |
+| `IHooksERC*` conformance + ERC-165 discovery | ✅ | ✅ | ✅ |
 | On-chain flags / `verifyToken` | — (N/A, fungible) | ✅ | ✅ |
 | Pause / issuer admin transfer | ✅ | ✅ | ✅ |
 | ERC-2981 royalty info | — | ✅ | not yet |
@@ -198,9 +144,10 @@ write-up, not as production code.
 
 Also present: a shared `Errors.sol` (custom errors, no revert strings on
 the hot paths), a `Types.sol` (`TokenStandard` enum), a `Codehash.sol`
-library (see below), and `IHooks.sol` interfaces (`IHookMintERC20/721/1155`)
-that let external tooling drive hook-initiated minting without knowing the
-concrete standard ahead of time.
+library (see below), `IHooksERC20/721/1155.sol` (the interfaces `HooksERC20/721/1155`
+implement — see "Core concepts" above), and `IHooks.sol`
+(`IHookMintERC20/721/1155`) that let external tooling drive hook-initiated
+minting without knowing the concrete standard ahead of time.
 
 ## Verifying a deployment
 

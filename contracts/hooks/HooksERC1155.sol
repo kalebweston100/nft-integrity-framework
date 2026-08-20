@@ -1,12 +1,16 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.8.34;
 
+import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 import "../token/IntegrityERC1155.sol";
+import "../interfaces/IHooksERC1155.sol";
 
 /**
  * @title HooksERC1155
  * @notice Abstract base for ERC-1155 hooks contracts. Provides the full hook
- *         framework, access control, and deploys its own token.
+ *         framework, access control, and deploys its own token. Implements
+ *         IHooksERC1155 — see that interface for the normative rules this
+ *         contract's calling convention follows.
  *
  * DEPLOYMENT FLOW:
  *   1. Deploy MyHooks(issuerAdmin, baseTokenURI, contractURI) inheriting
@@ -16,16 +20,16 @@ import "../token/IntegrityERC1155.sol";
  *      synchronously, as the return value of `new`.
  *
  * EXTENSION:
- *   Override _onBeforeTransfer1155 / _onBeforeMint1155 / _onBeforeBurn1155 for custom logic.
- *   Override _onAfterMint1155 / _onAfterBurn1155 for post-mutation logic.
+ *   Override _onBeforeTransfer / _onBeforeMint / _onBeforeBurn for custom logic.
+ *   Override _onAfterMint / _onAfterBurn for post-mutation logic.
  *   After-hooks are wrapped in try/catch by the token — bugs won't brick the token.
  *
  * HOOK EXECUTION ORDER:
- *   TRANSFER: pause → beforeTransfer1155 → validateTransfer1155 → balance → afterTransfer1155
- *   MINT:     beforeMint1155 → validateFlags1155 → flags commit/check → balance → afterMint1155
- *   BURN:     balance check → beforeBurn1155 → balance → afterBurn1155
+ *   TRANSFER: pause → beforeTransfer → validateTransfer → balance → afterTransfer
+ *   MINT:     beforeMint → validateFlags → flags commit/check → balance → afterMint
+ *   BURN:     balance check → beforeBurn → balance → afterBurn
  */
-abstract contract HooksERC1155 {
+abstract contract HooksERC1155 is IHooksERC1155, ERC165 {
     /// @notice The IntegrityERC1155 this hooks contract deployed and governs.
     IntegrityERC1155 public immutable token;
     address public issuerAdmin;
@@ -59,28 +63,33 @@ abstract contract HooksERC1155 {
         token.hookSetTokenURI(id, newURI);
     }
 
+    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
+        return interfaceId == type(IHooksERC1155).interfaceId || super.supportsInterface(interfaceId);
+    }
+
     // =========================================================================
     //                          TRANSFER HOOKS
     // =========================================================================
 
-    function beforeTransfer1155(address from, address to, uint256 id, uint256 amount) external onlyToken {
-        _onBeforeTransfer1155(from, to, id, amount);
+    function beforeTransfer(address from, address to, uint256 id, uint256 amount) external override onlyToken {
+        _onBeforeTransfer(from, to, id, amount);
     }
 
-    function _onBeforeTransfer1155(address from, address to, uint256 id, uint256 amount) internal virtual {}
+    function _onBeforeTransfer(address from, address to, uint256 id, uint256 amount) internal virtual {}
 
-    function validateTransfer1155(address from, address to, uint256 id, uint256 amount)
+    function validateTransfer(address from, address to, uint256 id, uint256 amount)
         external
         view
+        override
         onlyToken
         returns (bool valid, string memory reason)
     {
         return (true, "");
     }
 
-    function afterTransfer1155(address from, address to, uint256 id, uint256 amount) external virtual onlyToken {}
+    function afterTransfer(address from, address to, uint256 id, uint256 amount) external virtual override onlyToken {}
 
-    function onTransferBlocked1155(address from, address to, uint256 id, uint256 amount, string calldata reason)
+    function onTransferBlocked(address from, address to, uint256 id, uint256 amount, string calldata reason)
         external
         onlyToken
     {}
@@ -89,15 +98,16 @@ abstract contract HooksERC1155 {
     //                            MINT HOOKS
     // =========================================================================
 
-    function beforeMint1155(address to, uint256 id, uint256 amount, bytes calldata data)
+    function beforeMint(address to, uint256 id, uint256 amount, bytes calldata data)
         external
+        override
         onlyToken
         returns (bool allowed, string memory reason)
     {
-        return _onBeforeMint1155(to, id, amount, data);
+        return _onBeforeMint(to, id, amount, data);
     }
 
-    function _onBeforeMint1155(address to, uint256 id, uint256 amount, bytes calldata data)
+    function _onBeforeMint(address to, uint256 id, uint256 amount, bytes calldata data)
         internal
         virtual
         returns (bool, string memory)
@@ -105,26 +115,26 @@ abstract contract HooksERC1155 {
         return (true, "");
     }
 
-    function afterMint1155(address to, uint256 id, uint256 amount, bytes calldata data) external onlyToken {
-        _onAfterMint1155(to, id, amount, data);
+    function afterMint(address to, uint256 id, uint256 amount, bytes calldata data) external override onlyToken {
+        _onAfterMint(to, id, amount, data);
     }
 
-    function _onAfterMint1155(address to, uint256 id, uint256 amount, bytes calldata data) internal virtual {}
+    function _onAfterMint(address to, uint256 id, uint256 amount, bytes calldata data) internal virtual {}
 
     /// @notice Called before the token commits/checks a mint's flag bitmap for an id.
     ///         Override to enforce custom flag policy. This hook can only allow/deny —
     ///         it has no access to token storage and cannot write flags itself; only the
     ///         token contract ever writes flag storage.
-    function validateFlags1155(address to, uint256 id, uint256 flags)
+    function validateFlags(address to, uint256 id, uint256 flags)
         external
         view
         onlyToken
         returns (bool allowed, string memory reason)
     {
-        return _onValidateFlags1155(to, id, flags);
+        return _onValidateFlags(to, id, flags);
     }
 
-    function _onValidateFlags1155(address to, uint256 id, uint256 flags)
+    function _onValidateFlags(address to, uint256 id, uint256 flags)
         internal
         view
         virtual
@@ -137,27 +147,24 @@ abstract contract HooksERC1155 {
     //                            BURN HOOKS
     // =========================================================================
 
-    function beforeBurn1155(address from, uint256 id, uint256 amount)
+    function beforeBurn(address from, uint256 id, uint256 amount)
         external
+        override
         onlyToken
         returns (bool allowed, string memory reason)
     {
-        return _onBeforeBurn1155(from, id, amount);
+        return _onBeforeBurn(from, id, amount);
     }
 
-    function _onBeforeBurn1155(address from, uint256 id, uint256 amount)
-        internal
-        virtual
-        returns (bool, string memory)
-    {
+    function _onBeforeBurn(address from, uint256 id, uint256 amount) internal virtual returns (bool, string memory) {
         return (true, "");
     }
 
-    function afterBurn1155(address from, uint256 id, uint256 amount) external onlyToken {
-        _onAfterBurn1155(from, id, amount);
+    function afterBurn(address from, uint256 id, uint256 amount) external override onlyToken {
+        _onAfterBurn(from, id, amount);
     }
 
-    function _onAfterBurn1155(address from, uint256 id, uint256 amount) internal virtual {}
+    function _onAfterBurn(address from, uint256 id, uint256 amount) internal virtual {}
 
     // =========================================================================
     //                          METADATA HOOKS
@@ -169,7 +176,7 @@ abstract contract HooksERC1155 {
 
     function afterSetURI(string calldata newUri) external onlyToken {}
 
-    function beforeSetTokenURI1155(uint256, string calldata)
+    function beforeSetTokenURI(uint256, string calldata)
         external
         view
         onlyToken
@@ -178,5 +185,5 @@ abstract contract HooksERC1155 {
         return (true, "");
     }
 
-    function afterSetTokenURI1155(uint256, string calldata) external onlyToken {}
+    function afterSetTokenURI(uint256, string calldata) external onlyToken {}
 }

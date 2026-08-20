@@ -3,6 +3,10 @@ pragma solidity ^0.8.34;
 
 import "./utils/Fixtures.sol";
 import "../contracts/libraries/Codehash.sol";
+import "../contracts/interfaces/IHooksERC20.sol";
+import "../contracts/interfaces/IHooksERC721.sol";
+import "../contracts/interfaces/IHooksERC1155.sol";
+import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
 /// @notice Verifies the central claim the new architecture is built on: because
 ///         IntegrityERC20/721/1155 hold zero `immutable` state (the governing hooks
@@ -67,5 +71,28 @@ contract CodehashTest is Fixtures {
         // proving the check is a pure EXTCODEHASH read with no external call.
         (, IntegrityERC721 token) = _deployERC721(issuerA);
         assertFalse(Codehash.isCanonical(address(0xDEAD), address(token).codehash));
+    }
+
+    // ─── ERC-165 conformance ──────────────────────────────────────────────────
+    // A marketplace or indexer's actual discovery mechanism: confirm a hooks
+    // contract declares the interface before trusting the token it governs.
+
+    function test_erc165_hooksERC20DeclaresConformance() public {
+        (TestHooksERC20 hooks,) = _deployERC20(issuerA);
+        assertTrue(IERC165(address(hooks)).supportsInterface(type(IHooksERC20).interfaceId));
+        assertTrue(IERC165(address(hooks)).supportsInterface(type(IERC165).interfaceId));
+        assertFalse(IERC165(address(hooks)).supportsInterface(bytes4(0xdeadbeef)));
+    }
+
+    function test_erc165_hooksERC721DeclaresConformance() public {
+        (TestHooksERC721 hooks,) = _deployERC721(issuerA);
+        assertTrue(IERC165(address(hooks)).supportsInterface(type(IHooksERC721).interfaceId));
+        assertFalse(IERC165(address(hooks)).supportsInterface(bytes4(0xdeadbeef)));
+    }
+
+    function test_erc165_hooksERC1155DeclaresConformance() public {
+        (TestHooksERC1155 hooks,) = _deployERC1155(issuerA);
+        assertTrue(IERC165(address(hooks)).supportsInterface(type(IHooksERC1155).interfaceId));
+        assertFalse(IERC165(address(hooks)).supportsInterface(bytes4(0xdeadbeef)));
     }
 }

@@ -180,8 +180,8 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         if (to == address(0)) revert ZeroAddress();
 
         // [HOOKS - external call] Developer's pre-transfer and validation logic
-        _hooks.beforeTransfer721(from, to, tokenId);
-        (bool valid, string memory reason) = _hooks.validateTransfer721(from, to, tokenId);
+        _hooks.beforeTransfer(from, to, tokenId);
+        (bool valid, string memory reason) = _hooks.validateTransfer(from, to, tokenId);
         require(valid, reason);
 
         // [LOCKED] Clear approvals
@@ -204,7 +204,7 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         }
 
         // [HOOKS - external call, safe] Developer's post-transfer logic
-        try _hooks.afterTransfer721(from, to, tokenId) {}
+        try _hooks.afterTransfer(from, to, tokenId) {}
         catch (bytes memory failReason) {
             emit HookCallFailed("afterTransfer721", failReason);
         }
@@ -239,7 +239,7 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         if (tokenOwner == address(0)) revert NonexistentToken();
 
         // [HOOKS - external call] Developer's pre-burn logic
-        (bool allowed, string memory reason) = _hooks.beforeBurn721(tokenId);
+        (bool allowed, string memory reason) = _hooks.beforeBurn(tokenId);
         require(allowed, reason);
 
         delete _tokenApprovals[tokenId];
@@ -254,7 +254,7 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         }
 
         // [HOOKS - external call, safe] Developer's post-burn logic
-        try _hooks.afterBurn721(tokenId) {}
+        try _hooks.afterBurn(tokenId) {}
         catch (bytes memory failReason) {
             emit HookCallFailed("afterBurn721", failReason);
         }
@@ -265,12 +265,12 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         _mintChecks(to, tokenId);
 
         // [HOOKS - external call] Developer's pre-mint logic
-        (bool allowed, string memory reason) = _hooks.beforeMint721(to, tokenId, data);
+        (bool allowed, string memory reason) = _hooks.beforeMint(to, tokenId, data);
         require(allowed, reason);
 
         // [HOOKS - external call] Developer's custom flag policy (allow/deny only —
         // the hook has no storage access here and cannot write flags itself)
-        (bool flagsAllowed, string memory flagsReason) = _hooks.validateFlags721(to, tokenId, flags);
+        (bool flagsAllowed, string memory flagsReason) = _hooks.validateFlags(to, tokenId, flags);
         require(flagsAllowed, flagsReason);
 
         // [LOCKED] Commit flags + metadata hash atomically with mint — never writable again
@@ -279,7 +279,7 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         _mintBalanceUpdate(to, tokenId);
 
         // [HOOKS - external call, safe] Developer's post-mint logic
-        try _hooks.afterMint721(to, tokenId, data) {}
+        try _hooks.afterMint(to, tokenId, data) {}
         catch (bytes memory failReason) {
             emit HookCallFailed("afterMint721", failReason);
         }
@@ -450,12 +450,12 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     function setTokenURI(uint256 tokenId, string calldata newTokenURI) external onlyIssuerAdmin {
         if (_owners[tokenId] == address(0)) revert NonexistentToken();
 
-        (bool allowed, string memory reason) = _hooks.beforeSetTokenURI721(tokenId, newTokenURI);
+        (bool allowed, string memory reason) = _hooks.beforeSetTokenURI(tokenId, newTokenURI);
         require(allowed, reason);
 
         _tokenURIs[tokenId] = newTokenURI;
 
-        try _hooks.afterSetTokenURI721(tokenId, newTokenURI) {}
+        try _hooks.afterSetTokenURI(tokenId, newTokenURI) {}
         catch (bytes memory failReason) {
             emit HookCallFailed("afterSetTokenURI721", failReason);
         }
@@ -586,7 +586,7 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         returns (bool allowed, string memory reason)
     {
         if (_isPaused()) return (false, "Token is paused");
-        (bool valid, string memory validationReason) = _hooks.validateTransfer721(from, to, tokenId);
+        (bool valid, string memory validationReason) = _hooks.validateTransfer(from, to, tokenId);
         if (!valid) return (false, validationReason);
         return (true, "");
     }

@@ -192,8 +192,8 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         if (to == address(0)) revert ZeroAddress();
 
         // [HOOKS - external call] Developer's pre-transfer and validation logic
-        _hooks.beforeTransfer1155(from, to, id, amount);
-        (bool valid, string memory reason) = _hooks.validateTransfer1155(from, to, id, amount);
+        _hooks.beforeTransfer(from, to, id, amount);
+        (bool valid, string memory reason) = _hooks.validateTransfer(from, to, id, amount);
         require(valid, reason);
 
         // Snapshot pre-transfer state for holder tracking
@@ -216,7 +216,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         }
 
         // [HOOKS - external call, safe] Developer's post-transfer logic
-        try _hooks.afterTransfer1155(from, to, id, amount) {}
+        try _hooks.afterTransfer(from, to, id, amount) {}
         catch (bytes memory failReason) {
             emit HookCallFailed("afterTransfer1155", failReason);
         }
@@ -266,9 +266,9 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
 
         // [HOOKS] Call beforeMint + validateFlags for each token class
         for (uint256 i = 0; i < ids.length; i++) {
-            (bool allowed, string memory reason) = _hooks.beforeMint1155(to, ids[i], amounts[i], data);
+            (bool allowed, string memory reason) = _hooks.beforeMint(to, ids[i], amounts[i], data);
             require(allowed, reason);
-            (bool flagsAllowed, string memory flagsReason) = _hooks.validateFlags1155(to, ids[i], flagsArr[i]);
+            (bool flagsAllowed, string memory flagsReason) = _hooks.validateFlags(to, ids[i], flagsArr[i]);
             require(flagsAllowed, flagsReason);
         }
 
@@ -290,7 +290,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
 
         // [HOOKS, safe] Call afterMint for each token class
         for (uint256 i = 0; i < ids.length; i++) {
-            try _hooks.afterMint1155(to, ids[i], amounts[i], data) {}
+            try _hooks.afterMint(to, ids[i], amounts[i], data) {}
             catch (bytes memory failReason) {
                 emit HookCallFailed("afterMint1155", failReason);
             }
@@ -303,7 +303,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         if (_balances[id][from] < amount) revert InsufficientBalance();
 
         // [HOOKS - external call] Developer's pre-burn logic
-        (bool allowed, string memory reason) = _hooks.beforeBurn1155(from, id, amount);
+        (bool allowed, string memory reason) = _hooks.beforeBurn(from, id, amount);
         require(allowed, reason);
 
         _balances[id][from] -= amount;
@@ -317,7 +317,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         }
 
         // [HOOKS - external call, safe] Developer's post-burn logic
-        try _hooks.afterBurn1155(from, id, amount) {}
+        try _hooks.afterBurn(from, id, amount) {}
         catch (bytes memory failReason) {
             emit HookCallFailed("afterBurn1155", failReason);
         }
@@ -334,7 +334,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
 
         // [HOOKS] Call beforeBurn for each token class
         for (uint256 i = 0; i < ids.length; i++) {
-            (bool allowed, string memory reason) = _hooks.beforeBurn1155(from, ids[i], amounts[i]);
+            (bool allowed, string memory reason) = _hooks.beforeBurn(from, ids[i], amounts[i]);
             require(allowed, reason);
         }
 
@@ -353,7 +353,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
 
         // [HOOKS, safe] Call afterBurn for each token class
         for (uint256 i = 0; i < ids.length; i++) {
-            try _hooks.afterBurn1155(from, ids[i], amounts[i]) {}
+            try _hooks.afterBurn(from, ids[i], amounts[i]) {}
             catch (bytes memory failReason) {
                 emit HookCallFailed("afterBurn1155", failReason);
             }
@@ -378,12 +378,12 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     /// @notice Set a per-token-ID URI override. Empty string clears the override,
     ///         reverting to the base URI template for that ID. Only callable by issuer admin.
     function setTokenURI(uint256 id, string calldata newTokenURI) external onlyIssuerAdmin {
-        (bool allowed, string memory reason) = _hooks.beforeSetTokenURI1155(id, newTokenURI);
+        (bool allowed, string memory reason) = _hooks.beforeSetTokenURI(id, newTokenURI);
         require(allowed, reason);
 
         _tokenURIs[id] = newTokenURI;
 
-        try _hooks.afterSetTokenURI1155(id, newTokenURI) {}
+        try _hooks.afterSetTokenURI(id, newTokenURI) {}
         catch (bytes memory failReason) {
             emit HookCallFailed("afterSetTokenURI1155", failReason);
         }
@@ -422,11 +422,11 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         if (to == address(0)) revert ZeroAddress();
 
         // [HOOKS - external call] Developer's pre-mint logic
-        (bool allowed, string memory reason) = _hooks.beforeMint1155(to, id, amount, data);
+        (bool allowed, string memory reason) = _hooks.beforeMint(to, id, amount, data);
         require(allowed, reason);
 
         // [HOOKS - external call] Developer's custom flag policy (allow/deny only)
-        (bool flagsAllowed, string memory flagsReason) = _hooks.validateFlags1155(to, id, flags);
+        (bool flagsAllowed, string memory flagsReason) = _hooks.validateFlags(to, id, flags);
         require(flagsAllowed, flagsReason);
 
         // [LOCKED] Commit (or verify consistency of) this id's flags
@@ -443,7 +443,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         }
 
         // [HOOKS - external call, safe] Developer's post-mint logic
-        try _hooks.afterMint1155(to, id, amount, data) {}
+        try _hooks.afterMint(to, id, amount, data) {}
         catch (bytes memory failReason) {
             emit HookCallFailed("afterMint1155", failReason);
         }
@@ -499,7 +499,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
 
         // [HOOKS, safe] afterMint1155 for supply tracking — guarded against re-entry
         _inHookMint = true;
-        try _hooks.afterMint1155(to, id, amount, "") {}
+        try _hooks.afterMint(to, id, amount, "") {}
         catch (bytes memory reason) {
             emit HookCallFailed("afterMint1155", reason);
         }
@@ -640,7 +640,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     {
         if (_isPaused()) return (false, "Token is paused");
         if (_balances[id][from] < amount) return (false, "Insufficient balance");
-        (bool valid, string memory validationReason) = _hooks.validateTransfer1155(from, to, id, amount);
+        (bool valid, string memory validationReason) = _hooks.validateTransfer(from, to, id, amount);
         if (!valid) return (false, validationReason);
         return (true, "");
     }

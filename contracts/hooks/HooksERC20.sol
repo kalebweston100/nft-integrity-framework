@@ -1,12 +1,16 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.8.34;
 
+import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 import "../token/IntegrityERC20.sol";
+import "../interfaces/IHooksERC20.sol";
 
 /**
  * @title HooksERC20
  * @notice Abstract base for ERC-20 hooks contracts. Provides the full hook
- *         framework, access control, and deploys its own token.
+ *         framework, access control, and deploys its own token. Implements
+ *         IHooksERC20 — see that interface for the normative rules this
+ *         contract's calling convention follows.
  *
  * DEPLOYMENT FLOW:
  *   1. Deploy MyHooks(issuerAdmin, name, symbol, contractURI) inheriting HooksERC20
@@ -24,7 +28,7 @@ import "../token/IntegrityERC20.sol";
  *   MINT:     beforeMint → balance → afterMint
  *   BURN:     balance check → beforeBurn → balance → afterBurn
  */
-abstract contract HooksERC20 {
+abstract contract HooksERC20 is IHooksERC20, ERC165 {
     event AdminTransferred(address indexed oldAdmin, address indexed newAdmin);
 
     /// @notice The IntegrityERC20 this hooks contract deployed and governs.
@@ -58,12 +62,16 @@ abstract contract HooksERC20 {
         token.hookMint(to, amount);
     }
 
+    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
+        return interfaceId == type(IHooksERC20).interfaceId || super.supportsInterface(interfaceId);
+    }
+
     // =========================================================================
     //                          TRANSFER HOOKS
     // =========================================================================
 
     /// @notice Override _onBeforeTransfer to add custom pre-transfer logic. Revert to block.
-    function beforeTransfer(address from, address to, uint256 amount) external onlyToken {
+    function beforeTransfer(address from, address to, uint256 amount) external override onlyToken {
         _onBeforeTransfer(from, to, amount);
     }
 
@@ -72,13 +80,14 @@ abstract contract HooksERC20 {
     function validateTransfer(address from, address to, uint256 amount)
         external
         view
+        override
         onlyToken
         returns (bool valid, string memory reason)
     {
         return (true, "");
     }
 
-    function afterTransfer(address from, address to, uint256 amount) external onlyToken {}
+    function afterTransfer(address from, address to, uint256 amount) external override onlyToken {}
 
     function onTransferBlocked(address from, address to, uint256 amount, string calldata reason) external onlyToken {}
 
@@ -89,6 +98,7 @@ abstract contract HooksERC20 {
     /// @notice Override _onBeforeMint to add custom pre-mint logic. Return (false, reason) to block.
     function beforeMint(address to, uint256 amount, bytes calldata data)
         external
+        override
         onlyToken
         returns (bool allowed, string memory reason)
     {
@@ -103,14 +113,19 @@ abstract contract HooksERC20 {
         return (true, "");
     }
 
-    function afterMint(address to, uint256 amount, bytes calldata data) external onlyToken {}
+    function afterMint(address to, uint256 amount, bytes calldata data) external override onlyToken {}
 
     // =========================================================================
     //                            BURN HOOKS
     // =========================================================================
 
     /// @notice Override _onBeforeBurn to add custom pre-burn logic. Return (false, reason) to block.
-    function beforeBurn(address from, uint256 amount) external onlyToken returns (bool allowed, string memory reason) {
+    function beforeBurn(address from, uint256 amount)
+        external
+        override
+        onlyToken
+        returns (bool allowed, string memory reason)
+    {
         return _onBeforeBurn(from, amount);
     }
 
@@ -118,5 +133,5 @@ abstract contract HooksERC20 {
         return (true, "");
     }
 
-    function afterBurn(address from, uint256 amount) external onlyToken {}
+    function afterBurn(address from, uint256 amount) external override onlyToken {}
 }

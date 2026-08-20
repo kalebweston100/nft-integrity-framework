@@ -9,14 +9,14 @@ import "../hooks/HooksERC721.sol";
  *         and exposes admin toggles to drive every branch in the token's pipeline.
  *
  * HOOK COVERAGE:
- *   beforeTransfer721  – recorded; optional revert to test transfer blocking
- *   beforeMint721      – recorded; optional (false, reason) to test mint blocking
- *   beforeBurn721      – recorded; optional (false, reason) to test burn blocking
+ *   beforeTransfer  – recorded; optional revert to test transfer blocking
+ *   beforeMint      – recorded; optional (false, reason) to test mint blocking
+ *   beforeBurn      – recorded; optional (false, reason) to test burn blocking
  *   hookMint path      – issuerMint() exercises IntegrityERC721.hookMint()
  *
  * LIMITATIONS:
- *   validateTransfer721, afterTransfer721, afterMint721, afterBurn721,
- *   beforeSetBaseURI, afterSetBaseURI, onTransferBlocked721 are not virtual in
+ *   validateTransfer, afterTransfer, afterMint, afterBurn,
+ *   beforeSetBaseURI, afterSetBaseURI, onTransferBlocked are not virtual in
  *   HooksERC721 and cannot be overridden; test those paths via token-side effects.
  */
 contract TestHooksERC721 is HooksERC721 {
@@ -66,19 +66,19 @@ contract TestHooksERC721 is HooksERC721 {
 
     // ─── Admin Controls ──────────────────────────────────────────────────────
 
-    /// @notice Toggle whether beforeTransfer721 reverts (blocks all transfers via hook).
+    /// @notice Toggle whether beforeTransfer reverts (blocks all transfers via hook).
     function setRevertOnTransfer(bool blocked, string calldata reason) external onlyIssuerAdmin {
         revertOnTransfer = blocked;
         transferRevertReason = reason;
     }
 
-    /// @notice Toggle whether beforeMint721 returns (false, reason) (blocks all mints via hook).
+    /// @notice Toggle whether beforeMint returns (false, reason) (blocks all mints via hook).
     function setBlockMints(bool blocked, string calldata reason) external onlyIssuerAdmin {
         blockMints = blocked;
         blockMintReason = reason;
     }
 
-    /// @notice Toggle whether beforeBurn721 returns (false, reason) (blocks all burns via hook).
+    /// @notice Toggle whether beforeBurn returns (false, reason) (blocks all burns via hook).
     function setBlockBurns(bool blocked, string calldata reason) external onlyIssuerAdmin {
         blockBurns = blocked;
         blockBurnReason = reason;
@@ -91,12 +91,12 @@ contract TestHooksERC721 is HooksERC721 {
 
     // ─── Hook Overrides ──────────────────────────────────────────────────────
 
-    function _onBeforeTransfer721(address from, address to, uint256 tokenId) internal override {
+    function _onBeforeTransfer(address from, address to, uint256 tokenId) internal override {
         beforeTransferLog.push(TransferRecord(from, to, tokenId));
         if (revertOnTransfer) revert(transferRevertReason);
     }
 
-    function _onBeforeMint721(
+    function _onBeforeMint(
         address to,
         uint256 tokenId,
         bytes calldata /*data*/
@@ -110,7 +110,7 @@ contract TestHooksERC721 is HooksERC721 {
         return (true, "");
     }
 
-    function _onBeforeBurn721(uint256 tokenId) internal override returns (bool, string memory) {
+    function _onBeforeBurn(uint256 tokenId) internal override returns (bool, string memory) {
         beforeBurnLog.push(BurnRecord(tokenId));
         if (blockBurns) return (false, blockBurnReason);
         return (true, "");

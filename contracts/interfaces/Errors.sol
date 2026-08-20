@@ -43,9 +43,3 @@ error UndefinedFlagBits();
 error FlagAlreadyDefined();
 error EmptyFlagLabel();
 error FlagsAlreadyCommitted();
-
-// ─── Ownership / platform fees (HooksFactory) ────────────────────────────────
-error NotOwner();
-error NotPendingOwner();
-error NothingToWithdraw();
-error WithdrawalFailed();

@@ -9,16 +9,16 @@ import "../hooks/HooksERC1155.sol";
  *         and exposes admin toggles to drive every branch in the token's pipeline.
  *
  * HOOK COVERAGE:
- *   beforeTransfer1155  – recorded; optional revert (global or per-tokenId)
- *   afterTransfer1155   – recorded (virtual in base, not overridden by HooksERC1155)
- *   beforeMint1155      – recorded; optional (false, reason) global or per-tokenId
- *   afterMint1155       – recorded via _onAfterMint1155
- *   beforeBurn1155      – recorded; optional (false, reason) global or per-tokenId
- *   afterBurn1155       – recorded via _onAfterBurn1155
- *   hookMint path       – issuerMint() exercises IntegrityERC1155.hookMint()
+ *   beforeTransfer  – recorded; optional revert (global or per-tokenId)
+ *   afterTransfer   – recorded (virtual in base, not overridden by HooksERC1155)
+ *   beforeMint      – recorded; optional (false, reason) global or per-tokenId
+ *   afterMint       – recorded via _onAfterMint
+ *   beforeBurn      – recorded; optional (false, reason) global or per-tokenId
+ *   afterBurn       – recorded via _onAfterBurn
+ *   hookMint path   – issuerMint() exercises IntegrityERC1155.hookMint()
  *
  * LIMITATIONS:
- *   validateTransfer1155, beforeSetURI, afterSetURI, onTransferBlocked1155 are not
+ *   validateTransfer, beforeSetURI, afterSetURI, onTransferBlocked are not
  *   virtual in HooksERC1155 and cannot be overridden; test those paths via
  *   token-side effects.
  */
@@ -123,7 +123,7 @@ contract TestHooksERC1155 is HooksERC1155 {
 
     // ─── Hook Overrides ──────────────────────────────────────────────────────
 
-    function _onBeforeTransfer1155(address from, address to, uint256 id, uint256 amount) internal override {
+    function _onBeforeTransfer(address from, address to, uint256 id, uint256 amount) internal override {
         beforeTransferLog.push(TransferRecord(from, to, id, amount));
         if (revertOnTransfer || revertOnTransferById[id]) {
             string memory reason = revertOnTransferById[id] ? transferRevertReasonById[id] : transferRevertReason;
@@ -131,13 +131,13 @@ contract TestHooksERC1155 is HooksERC1155 {
         }
     }
 
-    // afterTransfer1155 is virtual in HooksERC1155 (unlike ERC-20/721) so a hooks
+    // afterTransfer is virtual in HooksERC1155 (unlike ERC-20/721) so a hooks
     // author can override it directly for custom post-transfer logic.
-    function afterTransfer1155(address from, address to, uint256 id, uint256 amount) external override onlyToken {
+    function afterTransfer(address from, address to, uint256 id, uint256 amount) external override onlyToken {
         afterTransferLog.push(TransferRecord(from, to, id, amount));
     }
 
-    function _onBeforeMint1155(
+    function _onBeforeMint(
         address to,
         uint256 id,
         uint256 amount,
@@ -153,8 +153,8 @@ contract TestHooksERC1155 is HooksERC1155 {
         return (true, "");
     }
 
-    // Called by HooksERC1155.afterMint1155 after supply tracking update.
-    function _onAfterMint1155(
+    // Called by HooksERC1155.afterMint.
+    function _onAfterMint(
         address to,
         uint256 id,
         uint256 amount,
@@ -166,19 +166,15 @@ contract TestHooksERC1155 is HooksERC1155 {
         afterMintLog.push(MintRecord(to, id, amount));
     }
 
-    function _onBeforeBurn1155(address from, uint256 id, uint256 amount)
-        internal
-        override
-        returns (bool, string memory)
-    {
+    function _onBeforeBurn(address from, uint256 id, uint256 amount) internal override returns (bool, string memory) {
         beforeBurnLog.push(BurnRecord(from, id, amount));
         if (blockBurnsById[id]) return (false, blockBurnReasonById[id]);
         if (blockBurns) return (false, blockBurnReason);
         return (true, "");
     }
 
-    // Called by HooksERC1155.afterBurn1155 after supply tracking update.
-    function _onAfterBurn1155(address from, uint256 id, uint256 amount) internal override {
+    // Called by HooksERC1155.afterBurn.
+    function _onAfterBurn(address from, uint256 id, uint256 amount) internal override {
         afterBurnLog.push(BurnRecord(from, id, amount));
     }
 
