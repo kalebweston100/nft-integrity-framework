@@ -5,20 +5,25 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
 /**
  * @title IHooksERC1155
- * @notice The interface HooksERC1155 implements: a "restrictive external hooks"
- *         contract that deploys and governs its own new ERC-1155 token, using a
- *         locked (non-virtual) transfer/mint/burn pipeline. See IHooksERC20 for
- *         the full set of normative rules a conforming host token must follow
- *         (CALL-only invocation, fail-closed before/validate, fail-open
- *         try/catch-wrapped after, ERC-165 discovery, new-deployment-only —
- *         never a retrofit onto a pre-existing token).
+ * @notice A "restrictive external hooks" contract governing an ERC-1155 token whose
+ *         transfer/mint/burn pipeline is locked (non-virtual) and which routes
+ *         policy decisions out to this contract by plain external CALL.
+ *
+ * See IHooksERC20 for the full set of normative rules a conforming host token must
+ * follow (CALL-only invocation, fail-closed validate, fail-open try/catch-wrapped
+ * after, locked entry points, setter-less hooks reference, strict-superset
+ * conformance to the underlying token standard, and ERC-165 discovery together
+ * with the limits of what discovery proves).
+ *
+ * This interface is DENY-ONLY. Minting authority is a separate, separately
+ * discoverable capability — see IHookMinter in IHooks.sol.
  *
  * No separate batch hooks: the token's batch mint/burn/transfer entry points
  * (mintBatch, burnBatch, safeBatchTransferFrom) each loop and fire these same
  * single-item hooks once per item — there is no distinct batch code path to
- * standardize. `validateFlags`, the URI metadata hooks, and `onTransferBlocked`
- * are additional, framework-specific surface a conforming contract may expose
- * beyond this interface's minimum; they aren't part of it.
+ * standardize. The URI metadata hooks are additional, framework-specific surface a
+ * conforming contract may expose beyond this interface's minimum; they aren't
+ * part of it.
  */
 interface IHooksERC1155 is IERC165 {
     // =========================================================================

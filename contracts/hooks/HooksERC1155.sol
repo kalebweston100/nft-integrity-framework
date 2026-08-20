@@ -4,6 +4,7 @@ pragma solidity ^0.8.34;
 import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 import "../token/IntegrityERC1155.sol";
 import "../interfaces/IHooksERC1155.sol";
+import "../interfaces/IHooks.sol";
 
 /**
  * @title HooksERC1155
@@ -13,23 +14,44 @@ import "../interfaces/IHooksERC1155.sol";
  *         contract's calling convention follows.
  *
  * DEPLOYMENT FLOW:
- *   1. Deploy MyHooks(issuerAdmin, baseTokenURI, contractURI) inheriting
- *      HooksERC1155 — its constructor deploys the IntegrityERC1155 token directly
- *      (`new IntegrityERC1155(...)`) and wires itself as governor. There is no
- *      factory and no separate initialization step: `token` is set once,
- *      synchronously, as the return value of `new`.
+ *   Deploy MyHooks(issuerAdmin, baseTokenURI, contractURI) inheriting HooksERC1155
+ *   — its constructor deploys the IntegrityERC1155 token directly
+ *   (`new IntegrityERC1155(...)`) and wires itself as governor. There is no factory
+ *   and no separate initialization step: `token` is set once, synchronously, as
+ *   the return value of `new`.
  *
  * EXTENSION:
- *   Override _onBeforeTransfer / _onBeforeMint / _onBeforeBurn for custom logic.
- *   Override _onAfterMint / _onAfterBurn for post-mutation logic.
- *   After-hooks are wrapped in try/catch by the token — bugs won't brick the token.
+ *   Every hook in the calling convention has an internal `virtual` counterpart.
+ *   Override the `_on*` function, never the external one — the external functions
+ *   carry `onlyToken` and are deliberately non-virtual so an override cannot
+ *   remove that check.
+ *
+ *     Deny gates (fail-closed):
+ *       _onValidateTransfer  → return (false, reason) to block a transfer
+ *       _onBeforeMint        → return (false, reason) to block a mint
+ *       _onBeforeBurn        → return (false, reason) to block a burn
+ *       _onBeforeSetURI / _onBeforeSetTokenURI
+ *
+ *     Notifications (fail-open, try/catch-wrapped by the token):
+ *       _onBeforeTransfer, _onAfterTransfer, _onAfterMint, _onAfterBurn,
+ *       _onAfterSetURI, _onAfterSetTokenURI
+ *
+ *   Use _onValidateTransfer — not a revert in _onBeforeTransfer — to deny a
+ *   transfer. beforeTransfer is a settle-only notification per IHooksERC20 rule 2.
+ *
+ * MINTING AUTHORITY:
+ *   This base grants none. To let the hooks contract initiate mints, inherit
+ *   HooksERC1155Minter (below), which declares IHookMinter via ERC-165 so the
+ *   capability is discoverable from the hooks address alone.
  *
  * HOOK EXECUTION ORDER:
  *   TRANSFER: pause → beforeTransfer → validateTransfer → balance → afterTransfer
- *   MINT:     beforeMint → validateFlags → flags commit/check → balance → afterMint
+ *   MINT:     beforeMint → balance → afterMint
  *   BURN:     balance check → beforeBurn → balance → afterBurn
  */
 abstract contract HooksERC1155 is IHooksERC1155, ERC165 {
+    event AdminTransferred(address indexed oldAdmin, address indexed newAdmin);
+
     /// @notice The IntegrityERC1155 this hooks contract deployed and governs.
     IntegrityERC1155 public immutable token;
     address public issuerAdmin;
@@ -52,15 +74,9 @@ abstract contract HooksERC1155 is IHooksERC1155, ERC165 {
 
     function transferAdmin(address newAdmin) external onlyIssuerAdmin {
         require(newAdmin != address(0), "Hooks: Zero address");
+        address oldAdmin = issuerAdmin;
         issuerAdmin = newAdmin;
-    }
-
-    function _mintFromHooks(address to, uint256 id, uint256 amount, uint256 flags, bytes32 metadataHash) internal {
-        token.hookMint(to, id, amount, flags, metadataHash);
-    }
-
-    function _setTokenURIFromHooks(uint256 id, string memory newURI) internal {
-        token.hookSetTokenURI(id, newURI);
+        emit AdminTransferred(oldAdmin, newAdmin);
     }
 
     function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
@@ -75,6 +91,8 @@ abstract contract HooksERC1155 is IHooksERC1155, ERC165 {
         _onBeforeTransfer(from, to, id, amount);
     }
 
+    /// @dev Settle-only notification. Do not use a revert here to signal policy —
+    ///      override _onValidateTransfer instead.
     function _onBeforeTransfer(address from, address to, uint256 id, uint256 amount) internal virtual {}
 
     function validateTransfer(address from, address to, uint256 id, uint256 amount)
@@ -84,15 +102,24 @@ abstract contract HooksERC1155 is IHooksERC1155, ERC165 {
         onlyToken
         returns (bool valid, string memory reason)
     {
+        return _onValidateTransfer(from, to, id, amount);
+    }
+
+    /// @dev The authoritative deny gate for transfers. Return (false, reason) to block.
+    function _onValidateTransfer(address from, address to, uint256 id, uint256 amount)
+        internal
+        view
+        virtual
+        returns (bool, string memory)
+    {
         return (true, "");
     }
 
-    function afterTransfer(address from, address to, uint256 id, uint256 amount) external virtual override onlyToken {}
+    function afterTransfer(address from, address to, uint256 id, uint256 amount) external override onlyToken {
+        _onAfterTransfer(from, to, id, amount);
+    }
 
-    function onTransferBlocked(address from, address to, uint256 id, uint256 amount, string calldata reason)
-        external
-        onlyToken
-    {}
+    function _onAfterTransfer(address from, address to, uint256 id, uint256 amount) internal virtual {}
 
     // =========================================================================
     //                            MINT HOOKS
@@ -121,28 +148,6 @@ abstract contract HooksERC1155 is IHooksERC1155, ERC165 {
 
     function _onAfterMint(address to, uint256 id, uint256 amount, bytes calldata data) internal virtual {}
 
-    /// @notice Called before the token commits/checks a mint's flag bitmap for an id.
-    ///         Override to enforce custom flag policy. This hook can only allow/deny —
-    ///         it has no access to token storage and cannot write flags itself; only the
-    ///         token contract ever writes flag storage.
-    function validateFlags(address to, uint256 id, uint256 flags)
-        external
-        view
-        onlyToken
-        returns (bool allowed, string memory reason)
-    {
-        return _onValidateFlags(to, id, flags);
-    }
-
-    function _onValidateFlags(address to, uint256 id, uint256 flags)
-        internal
-        view
-        virtual
-        returns (bool, string memory)
-    {
-        return (true, "");
-    }
-
     // =========================================================================
     //                            BURN HOOKS
     // =========================================================================
@@ -170,20 +175,75 @@ abstract contract HooksERC1155 is IHooksERC1155, ERC165 {
     //                          METADATA HOOKS
     // =========================================================================
 
-    function beforeSetURI(string calldata newUri) external onlyToken returns (bool allowed, string memory reason) {
+    function beforeSetURI(string calldata newUri) external view onlyToken returns (bool allowed, string memory reason) {
+        return _onBeforeSetURI(newUri);
+    }
+
+    function _onBeforeSetURI(string calldata newUri) internal view virtual returns (bool, string memory) {
         return (true, "");
     }
 
-    function afterSetURI(string calldata newUri) external onlyToken {}
+    function afterSetURI(string calldata newUri) external onlyToken {
+        _onAfterSetURI(newUri);
+    }
 
-    function beforeSetTokenURI(uint256, string calldata)
+    function _onAfterSetURI(string calldata newUri) internal virtual {}
+
+    function beforeSetTokenURI(uint256 id, string calldata newURI)
         external
         view
         onlyToken
         returns (bool allowed, string memory reason)
     {
+        return _onBeforeSetTokenURI(id, newURI);
+    }
+
+    function _onBeforeSetTokenURI(uint256 id, string calldata newURI)
+        internal
+        view
+        virtual
+        returns (bool, string memory)
+    {
         return (true, "");
     }
 
-    function afterSetTokenURI(uint256, string calldata) external onlyToken {}
+    function afterSetTokenURI(uint256 id, string calldata newURI) external onlyToken {
+        _onAfterSetTokenURI(id, newURI);
+    }
+
+    function _onAfterSetTokenURI(uint256 id, string calldata newURI) internal virtual {}
+}
+
+/**
+ * @title HooksERC1155Minter
+ * @notice HooksERC1155 plus hook-initiated minting authority, declared via ERC-165.
+ *
+ * Inherit this instead of HooksERC1155 when your hooks contract needs to mint
+ * (e.g. mint-on-deposit). Doing so makes `supportsInterface(IHookMinter)` return
+ * true, so an integrator can tell from the hooks address alone that this contract
+ * is part of the token's supply policy.
+ *
+ * This is a disclosure mechanism, not a security boundary — see IHookMinter.
+ */
+abstract contract HooksERC1155Minter is HooksERC1155, IHookMinter {
+    constructor(address _issuerAdmin, string memory baseTokenURI, string memory contractURI_)
+        HooksERC1155(_issuerAdmin, baseTokenURI, contractURI_)
+    {}
+
+    /// @inheritdoc IHookMinter
+    function mintingAuthorityOver() external view override returns (address) {
+        return address(token);
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return interfaceId == type(IHookMinter).interfaceId || super.supportsInterface(interfaceId);
+    }
+
+    function _mintFromHooks(address to, uint256 id, uint256 amount) internal {
+        token.hookMint(to, id, amount);
+    }
+
+    function _setTokenURIFromHooks(uint256 id, string memory newURI) internal {
+        token.hookSetTokenURI(id, newURI);
+    }
 }

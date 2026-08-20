@@ -8,21 +8,15 @@ import "../hooks/HooksERC1155.sol";
  * @notice Concrete ERC-1155 hooks for testing. Records every accessible hook invocation
  *         and exposes admin toggles to drive every branch in the token's pipeline.
  *
- * HOOK COVERAGE:
- *   beforeTransfer  – recorded; optional revert (global or per-tokenId)
- *   afterTransfer   – recorded (virtual in base, not overridden by HooksERC1155)
- *   beforeMint      – recorded; optional (false, reason) global or per-tokenId
- *   afterMint       – recorded via _onAfterMint
- *   beforeBurn      – recorded; optional (false, reason) global or per-tokenId
- *   afterBurn       – recorded via _onAfterBurn
- *   hookMint path   – issuerMint() exercises IntegrityERC1155.hookMint()
+ * Inherits HooksERC1155Minter, so it declares IHookMinter via ERC-165 and can
+ * exercise IntegrityERC1155.hookMint(). A hooks contract that does NOT need
+ * minting authority should inherit plain HooksERC1155 instead.
  *
- * LIMITATIONS:
- *   validateTransfer, beforeSetURI, afterSetURI, onTransferBlocked are not
- *   virtual in HooksERC1155 and cannot be overridden; test those paths via
- *   token-side effects.
+ * Transfer denial goes through _onValidateTransfer, the authoritative deny gate —
+ * not through a revert in _onBeforeTransfer, which IHooksERC20 rule 2 reserves for
+ * settle-only notification.
  */
-contract TestHooksERC1155 is HooksERC1155 {
+contract TestHooksERC1155 is HooksERC1155Minter {
     // ─── Call Record Structs ─────────────────────────────────────────────────
 
     struct TransferRecord {
@@ -55,8 +49,8 @@ contract TestHooksERC1155 is HooksERC1155 {
 
     // ─── Behavior Flags (global) ─────────────────────────────────────────────
 
-    bool public revertOnTransfer;
-    string public transferRevertReason = "TestHooks: transfer blocked";
+    bool public blockTransfers;
+    string public blockTransferReason = "TestHooks: transfer blocked";
 
     bool public blockMints;
     string public blockMintReason = "TestHooks: mint blocked";
@@ -66,24 +60,24 @@ contract TestHooksERC1155 is HooksERC1155 {
 
     // ─── Behavior Flags (per-tokenId) ────────────────────────────────────────
 
-    mapping(uint256 => bool) public revertOnTransferById;
+    mapping(uint256 => bool) public blockTransfersById;
     mapping(uint256 => bool) public blockMintsById;
     mapping(uint256 => bool) public blockBurnsById;
     mapping(uint256 => string) public blockMintReasonById;
     mapping(uint256 => string) public blockBurnReasonById;
-    mapping(uint256 => string) public transferRevertReasonById;
+    mapping(uint256 => string) public blockTransferReasonById;
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     constructor(address _issuerAdmin, string memory baseTokenURI, string memory contractURI_)
-        HooksERC1155(_issuerAdmin, baseTokenURI, contractURI_)
+        HooksERC1155Minter(_issuerAdmin, baseTokenURI, contractURI_)
     {}
 
     // ─── Admin Controls (global) ─────────────────────────────────────────────
 
-    function setRevertOnTransfer(bool blocked, string calldata reason) external onlyIssuerAdmin {
-        revertOnTransfer = blocked;
-        transferRevertReason = reason;
+    function setBlockTransfers(bool blocked, string calldata reason) external onlyIssuerAdmin {
+        blockTransfers = blocked;
+        blockTransferReason = reason;
     }
 
     function setBlockMints(bool blocked, string calldata reason) external onlyIssuerAdmin {
@@ -98,9 +92,9 @@ contract TestHooksERC1155 is HooksERC1155 {
 
     // ─── Admin Controls (per-tokenId) ────────────────────────────────────────
 
-    function setRevertOnTransferById(uint256 id, bool blocked, string calldata reason) external onlyIssuerAdmin {
-        revertOnTransferById[id] = blocked;
-        transferRevertReasonById[id] = reason;
+    function setBlockTransfersById(uint256 id, bool blocked, string calldata reason) external onlyIssuerAdmin {
+        blockTransfersById[id] = blocked;
+        blockTransferReasonById[id] = reason;
     }
 
     function setBlockMintsById(uint256 id, bool blocked, string calldata reason) external onlyIssuerAdmin {
@@ -114,26 +108,30 @@ contract TestHooksERC1155 is HooksERC1155 {
     }
 
     /// @notice Exercises IntegrityERC1155.hookMint() — direct hook-gated mint.
-    function issuerMint(address to, uint256 id, uint256 amount, uint256 flags, bytes32 metadataHash)
-        external
-        onlyIssuerAdmin
-    {
-        _mintFromHooks(to, id, amount, flags, metadataHash);
+    function issuerMint(address to, uint256 id, uint256 amount) external onlyIssuerAdmin {
+        _mintFromHooks(to, id, amount);
     }
 
-    // ─── Hook Overrides ──────────────────────────────────────────────────────
+    // ─── Deny Gates ──────────────────────────────────────────────────────────
+
+    function _onValidateTransfer(address, address, uint256 id, uint256)
+        internal
+        view
+        override
+        returns (bool, string memory)
+    {
+        if (blockTransfersById[id]) return (false, blockTransferReasonById[id]);
+        if (blockTransfers) return (false, blockTransferReason);
+        return (true, "");
+    }
+
+    // ─── Notifications ───────────────────────────────────────────────────────
 
     function _onBeforeTransfer(address from, address to, uint256 id, uint256 amount) internal override {
         beforeTransferLog.push(TransferRecord(from, to, id, amount));
-        if (revertOnTransfer || revertOnTransferById[id]) {
-            string memory reason = revertOnTransferById[id] ? transferRevertReasonById[id] : transferRevertReason;
-            revert(reason);
-        }
     }
 
-    // afterTransfer is virtual in HooksERC1155 (unlike ERC-20/721) so a hooks
-    // author can override it directly for custom post-transfer logic.
-    function afterTransfer(address from, address to, uint256 id, uint256 amount) external override onlyToken {
+    function _onAfterTransfer(address from, address to, uint256 id, uint256 amount) internal override {
         afterTransferLog.push(TransferRecord(from, to, id, amount));
     }
 

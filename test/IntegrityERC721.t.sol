@@ -2,192 +2,258 @@
 pragma solidity ^0.8.34;
 
 import "./utils/Fixtures.sol";
-import "../contracts/interfaces/Errors.sol";
 
 contract IntegrityERC721Test is Fixtures {
-    address internal issuer = makeAddr("issuer");
-    address internal alice = makeAddr("alice");
-    address internal bob = makeAddr("bob");
+    address internal admin = address(0xA11CE);
+    address internal alice = address(0xBEEF);
+    address internal bob = address(0xCAFE);
 
-    uint8 internal constant FLAG_AUTHENTIC = 0;
-    uint8 internal constant FLAG_LIMITED = 1;
+    TestHooksERC721 internal hooks;
+    IntegrityERC721 internal token;
 
-    // ─── Mint / transfer / burn happy path ──────────────────────────────────
+    function setUp() public {
+        (hooks, token) = _deployERC721(admin);
+    }
 
-    function test_mint_setsOwnerAndTracksHolder() public {
-        (, IntegrityERC721 token) = _deployERC721(issuer);
-        vm.prank(issuer);
-        token.mint(alice, 1, 0, bytes32(0), "");
+    // ─── Mint / burn ─────────────────────────────────────────────────────────
+
+    function test_mint_setsOwnerAndSupply() public {
+        vm.prank(admin);
+        token.mint(alice, 1, "");
 
         assertEq(token.ownerOf(1), alice);
         assertEq(token.balanceOf(alice), 1);
-        assertEq(token.holderCount(), 1);
+        assertEq(token.totalSupply(), 1);
+        assertEq(hooks.beforeMintCount(), 1);
+        assertEq(hooks.afterMintCount(), 1);
     }
 
     function test_mint_revertsOnDuplicateTokenId() public {
-        (, IntegrityERC721 token) = _deployERC721(issuer);
-        vm.startPrank(issuer);
-        token.mint(alice, 1, 0, bytes32(0), "");
+        vm.startPrank(admin);
+        token.mint(alice, 1, "");
         vm.expectRevert(TokenAlreadyMinted.selector);
-        token.mint(bob, 1, 0, bytes32(0), "");
+        token.mint(bob, 1, "");
         vm.stopPrank();
     }
 
+    function test_onlyIssuerAdmin_canMint() public {
+        vm.prank(alice);
+        vm.expectRevert(NotIssuerAdmin.selector);
+        token.mint(alice, 1, "");
+    }
+
+    function test_burn_clearsOwnership() public {
+        vm.startPrank(admin);
+        token.mint(alice, 1, "");
+        token.burn(1);
+        vm.stopPrank();
+
+        assertEq(token.balanceOf(alice), 0);
+        assertEq(token.totalSupply(), 0);
+        vm.expectRevert(NonexistentToken.selector);
+        token.ownerOf(1);
+    }
+
+    // ─── Transfers ───────────────────────────────────────────────────────────
+
     function test_transferFrom_movesOwnership() public {
-        (, IntegrityERC721 token) = _deployERC721(issuer);
-        vm.prank(issuer);
-        token.mint(alice, 1, 0, bytes32(0), "");
+        vm.prank(admin);
+        token.mint(alice, 1, "");
 
         vm.prank(alice);
         token.transferFrom(alice, bob, 1);
 
         assertEq(token.ownerOf(1), bob);
+        assertEq(token.balanceOf(alice), 0);
+        assertEq(token.balanceOf(bob), 1);
+        assertEq(hooks.afterTransferCount(), 1);
     }
 
     function test_transferFrom_revertsIfNotOwnerOrApproved() public {
-        (, IntegrityERC721 token) = _deployERC721(issuer);
-        vm.prank(issuer);
-        token.mint(alice, 1, 0, bytes32(0), "");
+        vm.prank(admin);
+        token.mint(alice, 1, "");
 
         vm.prank(bob);
         vm.expectRevert(NotOwnerOrApproved.selector);
         token.transferFrom(alice, bob, 1);
     }
 
-    function test_burn_clearsOwnership() public {
-        (, IntegrityERC721 token) = _deployERC721(issuer);
-        vm.prank(issuer);
-        token.mint(alice, 1, 0, bytes32(0), "");
+    /// Regression: a self-transfer must not corrupt balances.
+    function test_selfTransfer_leavesBalanceIntact() public {
+        vm.prank(admin);
+        token.mint(alice, 1, "");
 
-        vm.prank(issuer);
+        vm.prank(alice);
+        token.transferFrom(alice, alice, 1);
+
+        assertEq(token.ownerOf(1), alice);
+        assertEq(token.balanceOf(alice), 1, "self-transfer must not change balance");
+        assertEq(token.totalSupply(), 1);
+    }
+
+    // ─── Pause ───────────────────────────────────────────────────────────────
+
+    /// Regression: EVERY transfer entry point must respect pause, including the
+    /// 4-argument safeTransferFrom overload.
+    function test_pause_blocksAllTransferEntryPoints() public {
+        vm.startPrank(admin);
+        token.mint(alice, 1, "");
+        token.pause();
+        vm.stopPrank();
+
+        vm.startPrank(alice);
+        vm.expectRevert(TokenPaused.selector);
+        token.transferFrom(alice, bob, 1);
+
+        vm.expectRevert(TokenPaused.selector);
+        token.safeTransferFrom(alice, bob, 1);
+
+        vm.expectRevert(TokenPaused.selector);
+        token.safeTransferFrom(alice, bob, 1, "");
+        vm.stopPrank();
+
+        assertEq(token.ownerOf(1), alice, "no transfer may land while paused");
+    }
+
+    function test_pause_blocksMintAndBurn() public {
+        vm.startPrank(admin);
+        token.mint(alice, 1, "");
+        token.pause();
+
+        vm.expectRevert(TokenPaused.selector);
+        token.mint(bob, 2, "");
+
+        vm.expectRevert(TokenPaused.selector);
         token.burn(1);
-
-        vm.expectRevert(NonexistentToken.selector);
-        token.ownerOf(1);
-    }
-
-    // ─── Flags: append-only registry ────────────────────────────────────────
-
-    function test_defineFlag_cannotBeRedefined() public {
-        (, IntegrityERC721 token) = _deployERC721(issuer);
-        vm.startPrank(issuer);
-        token.defineFlag(FLAG_AUTHENTIC, "Authentic");
-        vm.expectRevert(FlagAlreadyDefined.selector);
-        token.defineFlag(FLAG_AUTHENTIC, "Something else");
         vm.stopPrank();
     }
 
-    function test_mint_revertsOnUndefinedFlagBits() public {
-        (, IntegrityERC721 token) = _deployERC721(issuer);
-        vm.prank(issuer);
-        vm.expectRevert(UndefinedFlagBits.selector);
-        token.mint(alice, 1, 1 << FLAG_AUTHENTIC, bytes32(0), "");
-    }
+    // ─── Hook deny gates ─────────────────────────────────────────────────────
 
-    // ─── Flags: commit-once, permanently immutable ──────────────────────────
+    function test_hook_canBlockTransferViaValidateGate() public {
+        vm.prank(admin);
+        token.mint(alice, 1, "");
 
-    function test_mint_commitsFlagsAndMetadataPermanently() public {
-        (, IntegrityERC721 token) = _deployERC721(issuer);
-        bytes32 metaHash = keccak256("metadata-v1");
-
-        vm.startPrank(issuer);
-        token.defineFlag(FLAG_AUTHENTIC, "Authentic");
-        token.defineFlag(FLAG_LIMITED, "Limited Edition");
-        uint256 flags = (1 << FLAG_AUTHENTIC) | (1 << FLAG_LIMITED);
-        token.mint(alice, 1, flags, metaHash, "");
-        vm.stopPrank();
-
-        assertTrue(token.hasFlag(1, FLAG_AUTHENTIC));
-        assertTrue(token.hasFlag(1, FLAG_LIMITED));
-        assertEq(token.flagsOf(1), flags);
-        assertEq(token.metadataHashOf(1), metaHash);
-
-        // No function exists to rewrite committed flags/metadata — not even for the
-        // issuer admin. Transferring or burning-and-reminting does not resurrect them
-        // (burn does not clear the commitment, and the tokenId can't be re-minted).
-        vm.prank(alice);
-        token.transferFrom(alice, bob, 1);
-        assertEq(token.flagsOf(1), flags);
-    }
-
-    function test_verifyToken_trueOnlyWhenClaimsMatchCommitment() public {
-        (, IntegrityERC721 token) = _deployERC721(issuer);
-        bytes32 metaHash = keccak256("metadata-v1");
-
-        vm.startPrank(issuer);
-        token.defineFlag(FLAG_AUTHENTIC, "Authentic");
-        token.mint(alice, 1, 1 << FLAG_AUTHENTIC, metaHash, "");
-        vm.stopPrank();
-
-        (bool ok, uint256 actualFlags, bytes32 actualHash) = token.verifyToken(1, 1 << FLAG_AUTHENTIC, metaHash);
-        assertTrue(ok);
-        assertEq(actualFlags, 1 << FLAG_AUTHENTIC);
-        assertEq(actualHash, metaHash);
-
-        (bool okWrongFlag,,) = token.verifyToken(1, 1 << FLAG_LIMITED, bytes32(0));
-        assertFalse(okWrongFlag);
-
-        (bool okWrongHash,,) = token.verifyToken(1, 0, keccak256("wrong"));
-        assertFalse(okWrongHash);
-    }
-
-    function test_verifyToken_falseForNonexistentToken() public {
-        (, IntegrityERC721 token) = _deployERC721(issuer);
-        (bool ok,,) = token.verifyToken(999, 0, bytes32(0));
-        assertFalse(ok);
-    }
-
-    // ─── Hooks: denial paths ────────────────────────────────────────────────
-
-    function test_hook_canBlockTransfer() public {
-        (TestHooksERC721 hooks, IntegrityERC721 token) = _deployERC721(issuer);
-        vm.prank(issuer);
-        token.mint(alice, 1, 0, bytes32(0), "");
-        vm.prank(issuer);
-        hooks.setRevertOnTransfer(true, "frozen");
+        vm.prank(admin);
+        hooks.setBlockTransfers(true, "nope");
 
         vm.prank(alice);
-        vm.expectRevert(bytes("frozen"));
+        vm.expectRevert(bytes("nope"));
         token.transferFrom(alice, bob, 1);
+
+        assertEq(token.ownerOf(1), alice);
     }
 
     function test_hook_canBlockMint() public {
-        (TestHooksERC721 hooks, IntegrityERC721 token) = _deployERC721(issuer);
-        vm.prank(issuer);
-        hooks.setBlockMints(true, "allowlist only");
+        vm.prank(admin);
+        hooks.setBlockMints(true, "no minting");
 
-        vm.prank(issuer);
-        vm.expectRevert(bytes("allowlist only"));
-        token.mint(alice, 1, 0, bytes32(0), "");
+        vm.prank(admin);
+        vm.expectRevert(bytes("no minting"));
+        token.mint(alice, 1, "");
     }
 
-    // ─── Hooks: cannot bypass core rules ─────────────────────────────────────
+    function test_hook_canBlockBurn() public {
+        vm.startPrank(admin);
+        token.mint(alice, 1, "");
+        hooks.setBlockBurns(true, "no burning");
+
+        vm.expectRevert(bytes("no burning"));
+        token.burn(1);
+        vm.stopPrank();
+
+        assertEq(token.ownerOf(1), alice);
+    }
+
+    function test_canTransfer_reflectsHookDecision() public {
+        vm.prank(admin);
+        token.mint(alice, 1, "");
+
+        (bool ok,) = token.canTransfer(alice, bob, 1);
+        assertTrue(ok);
+
+        vm.prank(admin);
+        hooks.setBlockTransfers(true, "denied");
+
+        (bool ok2, string memory reason) = token.canTransfer(alice, bob, 1);
+        assertFalse(ok2);
+        assertEq(reason, "denied");
+    }
+
+    // ─── After-hooks are fail-open ───────────────────────────────────────────
+
+    /// A reverting after-hook must not be able to brick the token.
+    function test_revertingAfterHook_doesNotBrickToken() public {
+        vm.startPrank(admin);
+        token.mint(alice, 1, "");
+        hooks.setRevertInAfterHooks(true);
+        vm.stopPrank();
+
+        vm.prank(alice);
+        token.transferFrom(alice, bob, 1);
+
+        assertEq(token.ownerOf(1), bob, "transfer must still settle");
+        assertEq(hooks.afterTransferCount(), 0, "after-hook did revert");
+    }
+
+    // ─── Hook-initiated mint ─────────────────────────────────────────────────
 
     function test_hookMint_onlyCallableByHooksContract() public {
-        (, IntegrityERC721 token) = _deployERC721(issuer);
-        vm.prank(alice);
+        vm.prank(admin);
         vm.expectRevert(NotHooksContract.selector);
-        token.hookMint(alice, 1, 0, bytes32(0));
+        token.hookMint(alice, 1);
     }
 
-    function test_hookMint_stillEnforcesFlagDefinitionRule() public {
-        (TestHooksERC721 hooks,) = _deployERC721(issuer);
-        // Even the hook-gated mint path cannot commit undefined flag bits — the
-        // token contract enforces this centrally in _commitFlags, not per-caller.
-        vm.prank(issuer);
-        vm.expectRevert(UndefinedFlagBits.selector);
-        hooks.issuerMint(alice, 1, 1 << FLAG_AUTHENTIC, bytes32(0));
+    function test_hookMint_viaHooksContract() public {
+        vm.prank(admin);
+        hooks.issuerMint(alice, 7);
+
+        assertEq(token.ownerOf(7), alice);
+        assertEq(token.totalSupply(), 1);
     }
 
-    // ─── ERC-2981 royalties ──────────────────────────────────────────────────
+    // ─── Metadata ────────────────────────────────────────────────────────────
+
+    function test_tokenURI_fallsBackToBaseURI() public {
+        vm.prank(admin);
+        token.mint(alice, 42, "");
+        assertEq(token.tokenURI(42), "ipfs://base/42");
+    }
+
+    function test_tokenURI_overrideWins() public {
+        vm.startPrank(admin);
+        token.mint(alice, 42, "");
+        token.setTokenURI(42, "ipfs://custom");
+        vm.stopPrank();
+
+        assertEq(token.tokenURI(42), "ipfs://custom");
+        assertEq(hooks.afterSetTokenURICount(), 1);
+    }
+
+    function test_hook_canBlockBaseURIChange() public {
+        vm.startPrank(admin);
+        hooks.setBlockBaseURI(true);
+        vm.expectRevert(bytes("TestHooks: baseURI locked"));
+        token.setBaseURI("ipfs://new/");
+        vm.stopPrank();
+    }
+
+    // ─── Royalties / introspection ───────────────────────────────────────────
 
     function test_royaltyInfo_reflectsConfiguredFee() public {
-        (, IntegrityERC721 token) = _deployERC721(issuer);
-        vm.prank(issuer);
-        token.setDefaultRoyalty(bob, 500); // 5%
+        vm.prank(admin);
+        token.setDefaultRoyalty(bob, 500);
 
-        (address receiver, uint256 amount) = token.royaltyInfo(1, 1000 ether);
+        (address receiver, uint256 amount) = token.royaltyInfo(1, 10_000);
         assertEq(receiver, bob);
-        assertEq(amount, 50 ether);
+        assertEq(amount, 500);
+    }
+
+    function test_supportsInterface() public view {
+        assertTrue(token.supportsInterface(type(IERC721).interfaceId));
+        assertTrue(token.supportsInterface(type(IERC721Metadata).interfaceId));
+        assertTrue(token.supportsInterface(type(IERC2981).interfaceId));
+        assertTrue(token.supportsInterface(type(IERC165).interfaceId));
+        assertFalse(token.supportsInterface(0xdeadbeef));
     }
 }

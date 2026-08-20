@@ -5,21 +5,18 @@ import "../hooks/HooksERC20.sol";
 
 /**
  * @title TestHooksERC20
- * @notice Concrete ERC-20 hooks for testing. Records every accessible hook invocation
- *         and exposes admin toggles to drive every branch in the token's pipeline.
+ * @notice Concrete ERC-20 hooks for testing. Records every hook invocation and
+ *         exposes admin toggles to drive every branch in the token's pipeline.
  *
- * HOOK COVERAGE:
- *   beforeTransfer  – recorded; optional revert to test transfer blocking
- *   beforeMint      – recorded; optional (false, reason) to test mint blocking
- *   beforeBurn      – recorded; optional (false, reason) to test burn blocking
- *   hookMint path   – issuerMint() exercises IntegrityERC20.hookMint()
+ * Inherits HooksERC20Minter, so it declares IHookMinter via ERC-165 and can
+ * exercise IntegrityERC20.hookMint(). A hooks contract that does NOT need minting
+ * authority should inherit plain HooksERC20 instead.
  *
- * LIMITATIONS:
- *   validateTransfer, afterTransfer, afterMint, afterBurn, onTransferBlocked are
- *   not virtual in HooksERC20 and cannot be overridden; those paths are tested
- *   by observing token-side effects rather than hook-side recording.
+ * Transfer denial goes through _onValidateTransfer, the authoritative deny gate —
+ * not through a revert in _onBeforeTransfer, which IHooksERC20 rule 2 reserves for
+ * settle-only notification.
  */
-contract TestHooksERC20 is HooksERC20 {
+contract TestHooksERC20 is HooksERC20Minter {
     // ─── Call Record Structs ─────────────────────────────────────────────────
 
     struct TransferRecord {
@@ -41,13 +38,16 @@ contract TestHooksERC20 is HooksERC20 {
     // ─── Call Logs ───────────────────────────────────────────────────────────
 
     TransferRecord[] public beforeTransferLog;
+    TransferRecord[] public afterTransferLog;
     MintRecord[] public beforeMintLog;
+    MintRecord[] public afterMintLog;
     BurnRecord[] public beforeBurnLog;
+    BurnRecord[] public afterBurnLog;
 
     // ─── Behavior Flags ──────────────────────────────────────────────────────
 
-    bool public revertOnTransfer;
-    string public transferRevertReason = "TestHooks: transfer blocked";
+    bool public blockTransfers;
+    string public blockTransferReason = "TestHooks: transfer blocked";
 
     bool public blockMints;
     string public blockMintReason = "TestHooks: mint blocked";
@@ -55,53 +55,50 @@ contract TestHooksERC20 is HooksERC20 {
     bool public blockBurns;
     string public blockBurnReason = "TestHooks: burn blocked";
 
+    bool public revertInAfterHooks;
+
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     constructor(address _issuerAdmin, string memory tokenName, string memory tokenSymbol, string memory contractURI_)
-        HooksERC20(_issuerAdmin, tokenName, tokenSymbol, contractURI_)
+        HooksERC20Minter(_issuerAdmin, tokenName, tokenSymbol, contractURI_)
     {}
 
     // ─── Admin Controls ──────────────────────────────────────────────────────
 
-    /// @notice Toggle whether beforeTransfer reverts (blocks all transfers via hook).
-    function setRevertOnTransfer(bool blocked, string calldata reason) external onlyIssuerAdmin {
-        revertOnTransfer = blocked;
-        transferRevertReason = reason;
+    function setBlockTransfers(bool blocked, string calldata reason) external onlyIssuerAdmin {
+        blockTransfers = blocked;
+        blockTransferReason = reason;
     }
 
-    /// @notice Toggle whether beforeMint returns (false, reason) (blocks all mints via hook).
     function setBlockMints(bool blocked, string calldata reason) external onlyIssuerAdmin {
         blockMints = blocked;
         blockMintReason = reason;
     }
 
-    /// @notice Toggle whether beforeBurn returns (false, reason) (blocks all burns via hook).
     function setBlockBurns(bool blocked, string calldata reason) external onlyIssuerAdmin {
         blockBurns = blocked;
         blockBurnReason = reason;
     }
 
-    /// @notice Exercises IntegrityERC20.hookMint() — only callable from hooks.
+    /// @notice Make every after-hook revert, to prove the token's try/catch keeps
+    ///         a broken hooks contract from bricking the token.
+    function setRevertInAfterHooks(bool enabled) external onlyIssuerAdmin {
+        revertInAfterHooks = enabled;
+    }
+
+    /// @notice Exercises IntegrityERC20.hookMint().
     function issuerMint(address to, uint256 amount) external onlyIssuerAdmin {
         _mintFromHooks(to, amount);
     }
 
-    // ─── Hook Overrides ──────────────────────────────────────────────────────
+    // ─── Deny Gates ──────────────────────────────────────────────────────────
 
-    function _onBeforeTransfer(address from, address to, uint256 amount) internal override {
-        beforeTransferLog.push(TransferRecord(from, to, amount));
-        if (revertOnTransfer) revert(transferRevertReason);
+    function _onValidateTransfer(address, address, uint256) internal view override returns (bool, string memory) {
+        if (blockTransfers) return (false, blockTransferReason);
+        return (true, "");
     }
 
-    function _onBeforeMint(
-        address to,
-        uint256 amount,
-        bytes calldata /*data*/
-    )
-        internal
-        override
-        returns (bool, string memory)
-    {
+    function _onBeforeMint(address to, uint256 amount, bytes calldata) internal override returns (bool, string memory) {
         beforeMintLog.push(MintRecord(to, amount));
         if (blockMints) return (false, blockMintReason);
         return (true, "");
@@ -113,18 +110,51 @@ contract TestHooksERC20 is HooksERC20 {
         return (true, "");
     }
 
+    // ─── Notifications ───────────────────────────────────────────────────────
+
+    function _onBeforeTransfer(address from, address to, uint256 amount) internal override {
+        beforeTransferLog.push(TransferRecord(from, to, amount));
+    }
+
+    function _onAfterTransfer(address from, address to, uint256 amount) internal override {
+        require(!revertInAfterHooks, "TestHooks: afterTransfer exploded");
+        afterTransferLog.push(TransferRecord(from, to, amount));
+    }
+
+    function _onAfterMint(address to, uint256 amount, bytes calldata) internal override {
+        require(!revertInAfterHooks, "TestHooks: afterMint exploded");
+        afterMintLog.push(MintRecord(to, amount));
+    }
+
+    function _onAfterBurn(address from, uint256 amount) internal override {
+        require(!revertInAfterHooks, "TestHooks: afterBurn exploded");
+        afterBurnLog.push(BurnRecord(from, amount));
+    }
+
     // ─── View Helpers ─────────────────────────────────────────────────────────
 
     function beforeTransferCount() external view returns (uint256) {
         return beforeTransferLog.length;
     }
 
+    function afterTransferCount() external view returns (uint256) {
+        return afterTransferLog.length;
+    }
+
     function beforeMintCount() external view returns (uint256) {
         return beforeMintLog.length;
     }
 
+    function afterMintCount() external view returns (uint256) {
+        return afterMintLog.length;
+    }
+
     function beforeBurnCount() external view returns (uint256) {
         return beforeBurnLog.length;
+    }
+
+    function afterBurnCount() external view returns (uint256) {
+        return afterBurnLog.length;
     }
 
     function lastBeforeTransfer() external view returns (TransferRecord memory) {

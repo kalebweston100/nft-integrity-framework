@@ -6,27 +6,18 @@ import "../interfaces/Errors.sol";
 import "./IntegrityTokenBase.sol";
 import "../hooks/HooksERC1155.sol";
 import "../interfaces/IHooks.sol";
-import "../interfaces/IFlaggedToken.sol";
 import "../interfaces/IERC1155Receiver.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
+import "@openzeppelin/contracts/token/ERC1155/extensions/IERC1155MetadataURI.sol";
+import "@openzeppelin/contracts/interfaces/IERC2981.sol";
+import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
 /**
  * @title IntegrityERC1155
- * @notice The user-facing ERC-1155 token contract. Users call
- *         safeTransferFrom(), safeBatchTransferFrom(), etc. directly on this
- *         contract. Contains ALL token storage, the full locked transfer
- *         pipeline, the on-chain anti-fraud "flags" system, AND delegates to
- *         an external developer-deployed hooks contract.
- *
- * FLAGS (anti-fraud integrity system):
- *   Same collection-level append-only flag registry as IntegrityERC721 (see
- *   defineFlag()). Because an ERC-1155 id can be minted more than once (supply
- *   grows over time), a tokenId's flags/metadata hash are committed on the
- *   *first* mint of that id and are then permanently locked: every subsequent
- *   mint of the same id must supply the exact same flags/metadataHash or the
- *   call reverts — nobody, including the issuer, can silently change what an
- *   id's flags mean after the fact. Buyers call verifyToken()/hasFlag() with
- *   the id to trustlessly confirm what an item really carries before buying it.
+ * @notice The user-facing ERC-1155 token contract. Users call safeTransferFrom(),
+ *         safeBatchTransferFrom(), etc. directly on this contract. Contains ALL
+ *         token storage and the full locked transfer pipeline, and delegates
+ *         policy decisions to an external developer-deployed hooks contract.
  *
  * INHERITS:
  *   IntegrityTokenBase — reentrancy guard, IIntegrityToken partial implementation
@@ -37,22 +28,26 @@ import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
  *     hooks contract's constructor
  *   - safeTransferFrom(), safeBatchTransferFrom(), setApprovalForAll() are non-virtual
  *   - Transfer pipeline is non-overridable (this contract is not abstract)
- *   - Hooks run via external call — cannot access token storage
+ *   - Hooks run via external CALL — they cannot access token storage. The sole
+ *     exception is hookMint/hookSetTokenURI, which grant the hooks contract real
+ *     minting authority; a hooks contract that uses them declares IHookMinter via
+ *     ERC-165 so the capability is discoverable. See IHooks.sol.
  *   - Hooks address is read from msg.sender at construction time and stored in a
  *     plain, setter-less slot — never immutable, so this contract's own runtime
- *     bytecode stays byte-identical across every deployment. See Codehash.sol.
+ *     bytecode stays byte-identical across every deployment. See IntegrityVerifier.sol.
+ *   - Strict ERC-1155 superset: zero-amount transfers succeed and batch operations
+ *     emit exactly one TransferBatch (never also per-item TransferSingle), as the
+ *     standard requires.
  */
-contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, IntegrityTokenBase {
+contract IntegrityERC1155 is IERC1155, IERC1155MetadataURI, IERC2981, IHookMintERC1155, IntegrityTokenBase {
     // =========================================================================
     //                          EVENTS
     // =========================================================================
 
-    // Token-specific events (ERC1155 events inherited from IERC1155)
-    // Note: holder tracking is per-tokenId, so events include tokenId
-    event HolderAdded(uint256 indexed tokenId, address indexed holder, uint256 holderCount);
-    event HolderRemoved(uint256 indexed tokenId, address indexed holder, uint256 holderCount);
-    event TransferBlocked(address indexed from, address indexed to, uint256 amount, string reason);
     event HookCallFailed(string hookName, bytes reason);
+    event DefaultRoyaltyUpdated(address indexed receiver, uint96 feeNumerator);
+    event URIUpdated(string newURI);
+    event TokenURIUpdated(uint256 indexed id, string newTokenURI);
 
     // =========================================================================
     //                     HOOKS CONTRACT (plain storage, setter-less)
@@ -70,30 +65,10 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     mapping(uint256 => string) private _tokenURIs;
 
     mapping(uint256 => mapping(address => uint256)) private _balances;
-    mapping(address => uint256) private _aggregateBalances; // total across all token IDs
     mapping(address => mapping(address => bool)) private _operatorApprovals;
-    mapping(uint256 => uint256) private _holderCountPerToken;
 
-    uint256 _totalSupply;
-
-    /// @dev Guard flag to prevent circular calls when hookMint invokes afterMint1155.
-    bool private _inHookMint;
-
-    // =========================================================================
-    //                     FLAGS (anti-fraud integrity system)
-    // =========================================================================
-
-    /// @dev Permanent label for each flag bit index. Append-only — see defineFlag().
-    mapping(uint8 => string) private _flagLabels;
-    /// @dev Bitmask of every bit index that has been given a label.
-    uint256 private _definedFlagsMask;
-
-    /// @dev Per-id committed flag bitmap. [LOCKED] written once, on the id's first mint.
-    mapping(uint256 => uint256) private _flags;
-    /// @dev Per-id committed metadata hash. [LOCKED] written once, on the id's first mint.
-    mapping(uint256 => bytes32) private _metadataHash;
-    /// @dev Whether an id's flags have been committed yet.
-    mapping(uint256 => bool) private _flagsInitialized;
+    /// @dev Per-id circulating supply.
+    mapping(uint256 => uint256) private _totalSupply;
 
     // =========================================================================
     //                     ERC-2981 ROYALTY STORAGE
@@ -122,21 +97,6 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     }
 
     // =========================================================================
-    //              AGGREGATE BALANCE TRACKING (private helper)
-    // =========================================================================
-
-    /// @dev Updates the per-address aggregate balance across all token IDs.
-    ///      Called alongside per-ID balance mutations. Use address(0) to skip.
-    function _updateAggregateBalances(address from, address to, uint256 amount) private {
-        if (from != address(0)) {
-            _aggregateBalances[from] -= amount;
-        }
-        if (to != address(0)) {
-            _aggregateBalances[to] += amount;
-        }
-    }
-
-    // =========================================================================
     //                  ERC-1155 ENTRY POINTS (non-virtual, locked)
     // =========================================================================
 
@@ -147,7 +107,11 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         whenNotPaused
     {
         if (from != msg.sender && !_operatorApprovals[from][msg.sender]) revert NotOwnerOrApproved();
-        _transferPipeline1155(from, to, id, amount);
+
+        _transferItem(from, to, id, amount);
+        emit TransferSingle(msg.sender, from, to, id, amount);
+        _fireAfterTransfer(from, to, id, amount);
+
         _checkOnERC1155Received(msg.sender, from, to, id, amount, data);
     }
 
@@ -164,13 +128,17 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         if (ids.length != amounts.length) revert LengthMismatch();
 
         for (uint256 i = 0; i < ids.length; i++) {
-            _transferPipeline1155(from, to, ids[i], amounts[i]);
+            _transferItem(from, to, ids[i], amounts[i]);
         }
 
-        // EIP-1155 standard: emit TransferBatch as a summary event for ecosystem tooling.
-        // Individual TransferSingle events are already emitted per-item inside
-        // _transferPipeline1155.
+        // EIP-1155: a batch transfer emits exactly one TransferBatch. Per-item
+        // TransferSingle events are deliberately NOT emitted here — emitting both
+        // makes indexers double-count balances.
         emit TransferBatch(msg.sender, from, to, ids, amounts);
+
+        for (uint256 i = 0; i < ids.length; i++) {
+            _fireAfterTransfer(from, to, ids[i], amounts[i]);
+        }
 
         _checkOnERC1155BatchReceived(msg.sender, from, to, ids, amounts, data);
     }
@@ -185,37 +153,28 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     //                   TRANSFER PIPELINE (private, locked)
     // =========================================================================
 
-    function _transferPipeline1155(address from, address to, uint256 id, uint256 amount) private {
+    /// @dev Validates, runs the deny gate, and mutates balances for one item.
+    ///      Deliberately emits nothing — the caller owns event emission so that a
+    ///      batch transfer produces one TransferBatch rather than N TransferSingle.
+    ///      Zero-amount transfers are permitted, per ERC-1155.
+    function _transferItem(address from, address to, uint256 id, uint256 amount) private {
         // [LOCKED] Sufficient balance check
-        if (amount == 0) revert ZeroAmount();
         if (_balances[id][from] < amount) revert InsufficientBalance();
         if (to == address(0)) revert ZeroAddress();
 
-        // [HOOKS - external call] Developer's pre-transfer and validation logic
+        // [HOOKS - external call] Settle-only notification, then the authoritative
+        // deny gate. A hook can refuse here; it can never write token storage.
         _hooks.beforeTransfer(from, to, id, amount);
         (bool valid, string memory reason) = _hooks.validateTransfer(from, to, id, amount);
         require(valid, reason);
 
-        // Snapshot pre-transfer state for holder tracking
-        bool toWasNewHolder = (_balances[id][to] == 0);
-
         // [LOCKED] Balance mutation
         _balances[id][from] -= amount;
         _balances[id][to] += amount;
-        _updateAggregateBalances(from, to, amount);
-        emit TransferSingle(msg.sender, from, to, id, amount);
+    }
 
-        // [LOCKED] Per-token holder tracking
-        if (toWasNewHolder && _balances[id][to] > 0) {
-            _holderCountPerToken[id]++;
-            emit HolderAdded(id, to, _holderCountPerToken[id]);
-        }
-        if (_balances[id][from] == 0) {
-            _holderCountPerToken[id]--;
-            emit HolderRemoved(id, from, _holderCountPerToken[id]);
-        }
-
-        // [HOOKS - external call, safe] Developer's post-transfer logic
+    /// @dev [HOOKS - external call, safe] Post-transfer notification.
+    function _fireAfterTransfer(address from, address to, uint256 id, uint256 amount) private {
         try _hooks.afterTransfer(from, to, id, amount) {}
         catch (bytes memory failReason) {
             emit HookCallFailed("afterTransfer1155", failReason);
@@ -226,69 +185,54 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     //                     ISSUER ADMIN: MINT / BURN
     // =========================================================================
 
-    /// @notice Mint tokens of an id, committing its flags/metadata hash on first mint.
-    ///         Only callable by issuer admin.
-    /// @param to Recipient address.
-    /// @param id The token class ID.
-    /// @param amount Token amount to mint.
-    /// @param flags Bitmap of flags for this id. On the id's first mint this is committed
-    ///              permanently (every bit must already be defined via defineFlag()); on
-    ///              later mints of the same id it must exactly match what's already
-    ///              committed, or the call reverts.
-    /// @param metaHash keccak256 commitment to this id's canonical off-chain metadata.
-    /// @param data Arbitrary data forwarded to hooks.
-    function mint(address to, uint256 id, uint256 amount, uint256 flags, bytes32 metaHash, bytes calldata data)
+    /// @notice Mint tokens of an id. Only callable by issuer admin.
+    function mint(address to, uint256 id, uint256 amount, bytes calldata data)
         external
         onlyIssuerAdmin
         whenNotPaused
         nonReentrant
     {
-        _mintLogic(msg.sender, to, id, amount, flags, metaHash, data);
-        _totalSupply += amount;
+        if (to == address(0)) revert ZeroAddress();
+
+        // [HOOKS - external call] Developer's pre-mint logic
+        (bool allowed, string memory reason) = _hooks.beforeMint(to, id, amount, data);
+        require(allowed, reason);
+
+        _balances[id][to] += amount;
+        _totalSupply[id] += amount;
+        emit TransferSingle(msg.sender, address(0), to, id, amount);
+
+        // [HOOKS - external call, safe] Developer's post-mint logic
+        try _hooks.afterMint(to, id, amount, data) {}
+        catch (bytes memory failReason) {
+            emit HookCallFailed("afterMint1155", failReason);
+        }
     }
 
     /// @notice Batch mint tokens across multiple ids. Only callable by issuer admin.
-    /// @param flagsArr Per-id flag bitmap, same commit-once-then-must-match rule as mint().
-    /// @param metaHashArr Per-id metadata hash commitment.
-    /// @param data Arbitrary data forwarded to hooks.
-    function mintBatch(
-        address to,
-        uint256[] calldata ids,
-        uint256[] calldata amounts,
-        uint256[] calldata flagsArr,
-        bytes32[] calldata metaHashArr,
-        bytes calldata data
-    ) external onlyIssuerAdmin whenNotPaused nonReentrant {
+    function mintBatch(address to, uint256[] calldata ids, uint256[] calldata amounts, bytes calldata data)
+        external
+        onlyIssuerAdmin
+        whenNotPaused
+        nonReentrant
+    {
         if (to == address(0)) revert ZeroAddress();
-        if (ids.length != amounts.length || ids.length != flagsArr.length || ids.length != metaHashArr.length) {
-            revert LengthMismatch();
-        }
+        if (ids.length != amounts.length) revert LengthMismatch();
 
-        // [HOOKS] Call beforeMint + validateFlags for each token class
+        // [HOOKS] Deny gate for each token class, before any mutation
         for (uint256 i = 0; i < ids.length; i++) {
             (bool allowed, string memory reason) = _hooks.beforeMint(to, ids[i], amounts[i], data);
             require(allowed, reason);
-            (bool flagsAllowed, string memory flagsReason) = _hooks.validateFlags(to, ids[i], flagsArr[i]);
-            require(flagsAllowed, flagsReason);
         }
 
         for (uint256 i = 0; i < ids.length; i++) {
-            // [LOCKED] Commit (or verify consistency of) this id's flags
-            _commitOrCheckFlags(ids[i], flagsArr[i], metaHashArr[i]);
-
-            bool wasNewHolder = (_balances[ids[i]][to] == 0);
             _balances[ids[i]][to] += amounts[i];
-            _updateAggregateBalances(address(0), to, amounts[i]);
-            _totalSupply += amounts[i];
-            if (wasNewHolder && _balances[ids[i]][to] > 0) {
-                _holderCountPerToken[ids[i]]++;
-                emit HolderAdded(ids[i], to, _holderCountPerToken[ids[i]]);
-            }
+            _totalSupply[ids[i]] += amounts[i];
         }
 
         emit TransferBatch(msg.sender, address(0), to, ids, amounts);
 
-        // [HOOKS, safe] Call afterMint for each token class
+        // [HOOKS, safe] Post-mint notification for each token class
         for (uint256 i = 0; i < ids.length; i++) {
             try _hooks.afterMint(to, ids[i], amounts[i], data) {}
             catch (bytes memory failReason) {
@@ -297,8 +241,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         }
     }
 
-    /// @notice Burn tokens with holder tracking. Only callable by issuer admin.
-    /// @dev Flag/metadata commitments are permanent and are not affected by burns.
+    /// @notice Burn tokens. Only callable by issuer admin.
     function burn(address from, uint256 id, uint256 amount) external onlyIssuerAdmin whenNotPaused nonReentrant {
         if (_balances[id][from] < amount) revert InsufficientBalance();
 
@@ -307,14 +250,8 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         require(allowed, reason);
 
         _balances[id][from] -= amount;
-        _updateAggregateBalances(from, address(0), amount);
-        _totalSupply -= amount;
+        _totalSupply[id] -= amount;
         emit TransferSingle(msg.sender, from, address(0), id, amount);
-
-        if (_balances[id][from] == 0) {
-            _holderCountPerToken[id]--;
-            emit HolderRemoved(id, from, _holderCountPerToken[id]);
-        }
 
         // [HOOKS - external call, safe] Developer's post-burn logic
         try _hooks.afterBurn(from, id, amount) {}
@@ -323,7 +260,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         }
     }
 
-    /// @notice Batch burn tokens with holder tracking. Only callable by issuer admin.
+    /// @notice Batch burn tokens. Only callable by issuer admin.
     function burnBatch(address from, uint256[] calldata ids, uint256[] calldata amounts)
         external
         onlyIssuerAdmin
@@ -332,7 +269,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     {
         if (ids.length != amounts.length) revert LengthMismatch();
 
-        // [HOOKS] Call beforeBurn for each token class
+        // [HOOKS] Deny gate for each token class, before any mutation
         for (uint256 i = 0; i < ids.length; i++) {
             (bool allowed, string memory reason) = _hooks.beforeBurn(from, ids[i], amounts[i]);
             require(allowed, reason);
@@ -341,17 +278,12 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         for (uint256 i = 0; i < ids.length; i++) {
             if (_balances[ids[i]][from] < amounts[i]) revert InsufficientBalance();
             _balances[ids[i]][from] -= amounts[i];
-            _updateAggregateBalances(from, address(0), amounts[i]);
-            _totalSupply -= amounts[i];
-            if (_balances[ids[i]][from] == 0) {
-                _holderCountPerToken[ids[i]]--;
-                emit HolderRemoved(ids[i], from, _holderCountPerToken[ids[i]]);
-            }
+            _totalSupply[ids[i]] -= amounts[i];
         }
 
         emit TransferBatch(msg.sender, from, address(0), ids, amounts);
 
-        // [HOOKS, safe] Call afterBurn for each token class
+        // [HOOKS, safe] Post-burn notification for each token class
         for (uint256 i = 0; i < ids.length; i++) {
             try _hooks.afterBurn(from, ids[i], amounts[i]) {}
             catch (bytes memory failReason) {
@@ -360,15 +292,18 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         }
     }
 
+    // =========================================================================
+    //                     METADATA
+    // =========================================================================
+
     /// @notice Set the base URI. Only callable by issuer admin.
     function setURI(string calldata newuri) external onlyIssuerAdmin {
-        // [HOOKS - external call] Developer's pre-URI logic
         (bool allowed, string memory reason) = _hooks.beforeSetURI(newuri);
         require(allowed, reason);
 
         _uri = newuri;
+        emit URIUpdated(newuri);
 
-        // [HOOKS - external call, safe] Developer's post-URI logic
         try _hooks.afterSetURI(newuri) {}
         catch (bytes memory failReason) {
             emit HookCallFailed("afterSetURI", failReason);
@@ -382,6 +317,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         require(allowed, reason);
 
         _tokenURIs[id] = newTokenURI;
+        emit TokenURIUpdated(id, newTokenURI);
 
         try _hooks.afterSetTokenURI(id, newTokenURI) {}
         catch (bytes memory failReason) {
@@ -401,109 +337,35 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         if (receiver == address(0)) revert ZeroAddress();
         _royaltyReceiver = receiver;
         _royaltyFeeNumerator = feeNumerator;
+        emit DefaultRoyaltyUpdated(receiver, feeNumerator);
     }
 
     /// @notice ERC-2981 royalty info query.
-    function royaltyInfo(uint256, uint256 salePrice) external view returns (address receiver, uint256 royaltyAmount) {
+    function royaltyInfo(uint256, uint256 salePrice)
+        external
+        view
+        override
+        returns (address receiver, uint256 royaltyAmount)
+    {
         receiver = _royaltyReceiver;
         royaltyAmount = (salePrice * _royaltyFeeNumerator) / 10000;
-    }
-
-    /// @dev Mint logic with hooks (called by mint with data).
-    function _mintLogic(
-        address operator,
-        address to,
-        uint256 id,
-        uint256 amount,
-        uint256 flags,
-        bytes32 metaHash,
-        bytes calldata data
-    ) private {
-        if (to == address(0)) revert ZeroAddress();
-
-        // [HOOKS - external call] Developer's pre-mint logic
-        (bool allowed, string memory reason) = _hooks.beforeMint(to, id, amount, data);
-        require(allowed, reason);
-
-        // [HOOKS - external call] Developer's custom flag policy (allow/deny only)
-        (bool flagsAllowed, string memory flagsReason) = _hooks.validateFlags(to, id, flags);
-        require(flagsAllowed, flagsReason);
-
-        // [LOCKED] Commit (or verify consistency of) this id's flags
-        _commitOrCheckFlags(id, flags, metaHash);
-
-        bool wasNewHolder = (_balances[id][to] == 0);
-        _balances[id][to] += amount;
-        _updateAggregateBalances(address(0), to, amount);
-        emit TransferSingle(operator, address(0), to, id, amount);
-
-        if (wasNewHolder && _balances[id][to] > 0) {
-            _holderCountPerToken[id]++;
-            emit HolderAdded(id, to, _holderCountPerToken[id]);
-        }
-
-        // [HOOKS - external call, safe] Developer's post-mint logic
-        try _hooks.afterMint(to, id, amount, data) {}
-        catch (bytes memory failReason) {
-            emit HookCallFailed("afterMint1155", failReason);
-        }
-    }
-
-    /// @dev [LOCKED] Commits an id's flag bitmap/metadata hash on first mint; on every
-    ///      later mint of the same id, requires an exact match instead of allowing a
-    ///      rewrite. No other function ever writes these mappings.
-    function _commitOrCheckFlags(uint256 id, uint256 flags, bytes32 metaHash) private {
-        if (!_flagsInitialized[id]) {
-            if (flags & ~_definedFlagsMask != 0) revert UndefinedFlagBits();
-            _flags[id] = flags;
-            _metadataHash[id] = metaHash;
-            _flagsInitialized[id] = true;
-            emit FlagsCommitted(id, flags, metaHash);
-        } else {
-            if (_flags[id] != flags || _metadataHash[id] != metaHash) revert FlagsAlreadyCommitted();
-        }
     }
 
     // =========================================================================
     //                     HOOKS-INITIATED MINT / URI
     // =========================================================================
 
-    /// @notice Mint tokens initiated by the hooks contract, committing/checking the id's
-    ///         flags. Skips beforeMint1155 to avoid circular calls but still invokes
-    ///         afterMint1155 (guarded by _inHookMint) so per-tokenId supply tracking in
-    ///         HooksERC1155 stays accurate.
-    /// @dev Only callable by the hooks contract.
-    function hookMint(address to, uint256 id, uint256 amount, uint256 flags, bytes32 metaHash)
-        external
-        override
-        whenNotPaused
-        nonReentrant
-    {
+    /// @notice Mint tokens initiated by the hooks contract. Skips beforeMint/afterMint
+    ///         to avoid circular calls (the hooks contract IS the caller).
+    /// @dev Only callable by the hooks contract. This is real minting authority —
+    ///      a hooks contract that uses it MUST declare IHookMinter via ERC-165.
+    function hookMint(address to, uint256 id, uint256 amount) external override whenNotPaused nonReentrant {
         if (msg.sender != address(_hooks)) revert NotHooksContract();
         if (to == address(0)) revert ZeroAddress();
-        if (_inHookMint) revert ReentrantHookMint();
 
-        // [LOCKED] Commit (or verify consistency of) this id's flags
-        _commitOrCheckFlags(id, flags, metaHash);
-
-        bool wasNewHolder = (_balances[id][to] == 0);
         _balances[id][to] += amount;
-        _updateAggregateBalances(address(0), to, amount);
-        _totalSupply += amount;
+        _totalSupply[id] += amount;
         emit TransferSingle(msg.sender, address(0), to, id, amount);
-
-        if (wasNewHolder && _balances[id][to] > 0) {
-            _holderCountPerToken[id]++;
-            emit HolderAdded(id, to, _holderCountPerToken[id]);
-        }
-
-        // [HOOKS, safe] afterMint1155 for supply tracking — guarded against re-entry
-        _inHookMint = true;
-        try _hooks.afterMint(to, id, amount, "") {}
-        catch (bytes memory reason) {
-            emit HookCallFailed("afterMint1155", reason);
-        }
-        _inHookMint = false;
     }
 
     /// @notice Set a per-token-ID URI initiated by the hooks contract.
@@ -511,71 +373,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     function hookSetTokenURI(uint256 id, string calldata newURI) external override whenNotPaused {
         if (msg.sender != address(_hooks)) revert NotHooksContract();
         _tokenURIs[id] = newURI;
-    }
-
-    // =========================================================================
-    //                     FLAGS: COLLECTION-LEVEL REGISTRY
-    // =========================================================================
-
-    /// @notice Permanently defines the human-readable label for a flag bit index.
-    ///         Append-only — reverts if that bit already has a label.
-    /// @dev Only callable by issuer admin.
-    function defineFlag(uint8 bitIndex, string calldata label) external onlyIssuerAdmin {
-        if (bytes(_flagLabels[bitIndex]).length != 0) revert FlagAlreadyDefined();
-        if (bytes(label).length == 0) revert EmptyFlagLabel();
-        _flagLabels[bitIndex] = label;
-        _definedFlagsMask |= (uint256(1) << bitIndex);
-        emit FlagDefined(bitIndex, label);
-    }
-
-    function flagLabel(uint8 bitIndex) external view override returns (string memory) {
-        return _flagLabels[bitIndex];
-    }
-
-    function definedFlags() external view override returns (uint256) {
-        return _definedFlagsMask;
-    }
-
-    // =========================================================================
-    //                     FLAGS: BUYER-FACING VERIFICATION
-    // =========================================================================
-
-    function hasFlag(uint256 id, uint8 bitIndex) external view override returns (bool) {
-        return (_flags[id] >> bitIndex) & 1 == 1;
-    }
-
-    function flagsOf(uint256 id) external view override returns (uint256) {
-        return _flags[id];
-    }
-
-    function metadataHashOf(uint256 id) external view override returns (bytes32) {
-        return _metadataHash[id];
-    }
-
-    /// @notice Whether an id's flags/metadata have been committed yet (i.e. it has been minted at least once).
-    function flagsCommitted(uint256 id) external view returns (bool) {
-        return _flagsInitialized[id];
-    }
-
-    /// @notice One-call anti-scam check: does `id` really carry every flag the seller
-    ///         claims, and (optionally) does its metadata match what the buyer was shown?
-    function verifyToken(uint256 id, uint256 requiredFlagsMask, bytes32 expectedMetadataHash)
-        external
-        view
-        override
-        returns (bool ok, uint256 actualFlags, bytes32 actualMetadataHash)
-    {
-        if (!_flagsInitialized[id]) return (false, 0, bytes32(0));
-        actualFlags = _flags[id];
-        actualMetadataHash = _metadataHash[id];
-        bool flagsOk = (actualFlags & requiredFlagsMask) == requiredFlagsMask;
-        bool metaOk = expectedMetadataHash == bytes32(0) || expectedMetadataHash == actualMetadataHash;
-        ok = flagsOk && metaOk;
-    }
-
-    function verifyMetadata(uint256 id, bytes calldata metadata) external view override returns (bool) {
-        if (!_flagsInitialized[id]) revert NonexistentToken();
-        return keccak256(metadata) == _metadataHash[id];
+        emit TokenURIUpdated(id, newURI);
     }
 
     // =========================================================================
@@ -606,19 +404,15 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     }
 
     /// @notice Returns the metadata URI for a given token ID.
-    ///         Returns the per-token override if set; otherwise returns the base URI template.
-    function uri(uint256 id) external view returns (string memory) {
+    ///         Returns the per-token override if set; otherwise the base URI template.
+    function uri(uint256 id) external view override returns (string memory) {
         string memory override_ = _tokenURIs[id];
         return bytes(override_).length > 0 ? override_ : _uri;
     }
 
-    function holderCountPerToken(uint256 id) external view returns (uint256) {
-        return _holderCountPerToken[id];
-    }
-
-    /// @notice Returns the total balance of an account across all token IDs.
-    function totalBalanceOf(address account) external view returns (uint256) {
-        return _aggregateBalances[account];
+    /// @notice Circulating supply of a single token id.
+    function totalSupply(uint256 id) external view returns (uint256) {
+        return _totalSupply[id];
     }
 
     // =========================================================================
@@ -640,6 +434,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     {
         if (_isPaused()) return (false, "Token is paused");
         if (_balances[id][from] < amount) return (false, "Insufficient balance");
+        if (to == address(0)) return (false, "Zero recipient");
         (bool valid, string memory validationReason) = _hooks.validateTransfer(from, to, id, amount);
         if (!valid) return (false, validationReason);
         return (true, "");
@@ -650,9 +445,9 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     // =========================================================================
 
     function supportsInterface(bytes4 interfaceId) external pure override returns (bool) {
-        return interfaceId == type(IERC1155).interfaceId || interfaceId == type(IIntegrityToken).interfaceId
-            || interfaceId == type(IFlaggedToken).interfaceId || interfaceId == 0x2a55205a // ERC-2981
-            || interfaceId == 0x01ffc9a7; // ERC165
+        return interfaceId == type(IERC1155).interfaceId || interfaceId == type(IERC1155MetadataURI).interfaceId
+            || interfaceId == type(IIntegrityToken).interfaceId || interfaceId == type(IERC2981).interfaceId
+            || interfaceId == type(IERC165).interfaceId;
     }
 
     // =========================================================================

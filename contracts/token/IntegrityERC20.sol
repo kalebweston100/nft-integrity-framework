@@ -7,20 +7,21 @@ import "./IntegrityTokenBase.sol";
 import "../hooks/HooksERC20.sol";
 import "../interfaces/IHooks.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
 /**
  * @title IntegrityERC20
  * @notice The user-facing ERC-20 token contract. Users call transfer(),
  *         approve(), etc. directly on this contract. Contains ALL token
- *         storage, the full locked transfer pipeline, AND delegates to an
- *         external developer-deployed hooks contract for custom logic.
+ *         storage and the full locked transfer pipeline, and delegates policy
+ *         decisions to an external developer-deployed hooks contract.
  *
  * ARCHITECTURE:
- *   This contract IS the token. It holds all state (balances, allowances,
- *   holder tracking, admin state) and contains the full transfer pipeline.
- *   Developers customize behavior by deploying a separate hooks contract
- *   implementing ITokenHooks. The token calls hooks via external call — the
- *   hooks contract has its own storage and CANNOT access or modify token state.
+ *   This contract IS the token. It holds all state (balances, allowances, admin
+ *   state) and contains the full transfer pipeline. Developers customize behavior
+ *   by deploying a separate hooks contract inheriting HooksERC20. The token calls
+ *   hooks via external CALL — the hooks contract has its own storage and CANNOT
+ *   access or modify token state.
  *
  * INHERITS:
  *   IntegrityTokenBase — reentrancy guard, IIntegrityToken partial implementation
@@ -34,25 +35,22 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  *   3. Users interact with THIS contract for all ERC-20 operations
  *
  * SECURITY:
- *   - Deployed exclusively by its own hooks contract, via `new`, from inside that
- *     hooks contract's constructor
  *   - transfer(), transferFrom(), approve() are non-virtual (concrete contract)
  *   - Transfer pipeline is non-overridable (this contract is not abstract)
- *   - Hooks run via external call — cannot access token storage
- *   - Hooks can only ADD restrictions (revert/return false), not bypass checks
+ *   - Hooks run via external CALL — they cannot access token storage. The sole
+ *     exception is hookMint, which grants the hooks contract real minting
+ *     authority; a hooks contract that uses it declares IHookMinter via ERC-165
+ *     so the capability is discoverable. See IHooks.sol.
  *   - Hooks address is read from msg.sender at construction time and stored in a
  *     plain, setter-less slot — never immutable, so this contract's own runtime
- *     bytecode stays byte-identical across every deployment. See Codehash.sol.
+ *     bytecode stays byte-identical across every deployment. See IntegrityVerifier.sol.
+ *   - Strict ERC-20 superset: zero-value transfers succeed, as the standard requires.
  */
 contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     // =========================================================================
     //                          EVENTS
     // =========================================================================
 
-    // Token-specific events (ERC20 events inherited from IERC20)
-    event HolderAdded(address indexed holder, uint256 holderCount);
-    event HolderRemoved(address indexed holder, uint256 holderCount);
-    event TransferBlocked(address indexed from, address indexed to, uint256 amount, string reason);
     event HookCallFailed(string hookName, bytes reason);
 
     // =========================================================================
@@ -71,11 +69,9 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     string private _symbol;
     uint8 public constant decimals = 18;
     uint256 private _totalSupply;
-    uint256 private _holderCount;
 
     mapping(address => uint256) private _balances;
     mapping(address => mapping(address => uint256)) private _allowances;
-    mapping(address => uint256) private _firstReceivedAt;
 
     // =========================================================================
     //                          CONSTRUCTOR
@@ -83,9 +79,6 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
 
     /// @notice Deployed by its own hooks contract, via `new`, from inside that
     ///         contract's constructor.
-    /// @param admin The initial issuer admin address.
-    /// @param tokenName The token's display name.
-    /// @param tokenSymbol The token's ticker symbol.
     constructor(address admin, string memory tokenName, string memory tokenSymbol, string memory initialContractURI)
         IntegrityTokenBase(admin, initialContractURI)
     {
@@ -106,13 +99,11 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     //                  ERC-20 ENTRY POINTS (non-virtual, locked)
     // =========================================================================
 
-    /// @notice Transfer tokens.
     function transfer(address to, uint256 amount) external override whenNotPaused nonReentrant returns (bool) {
         _transferPipeline(msg.sender, to, amount);
         return true;
     }
 
-    /// @notice Transfer tokens on behalf of another address.
     function transferFrom(address from, address to, uint256 amount)
         external
         override
@@ -127,9 +118,7 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         return true;
     }
 
-    /// @notice Approve a spender.
     function approve(address spender, uint256 amount) external override returns (bool) {
-        if (msg.sender == address(0)) revert ZeroAddress();
         if (spender == address(0)) revert ZeroAddress();
         _allowances[msg.sender][spender] = amount;
         emit Approval(msg.sender, spender, amount);
@@ -158,13 +147,14 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     //                   TRANSFER PIPELINE (private, locked)
     // =========================================================================
 
+    /// @dev Zero-value transfers are permitted and emit Transfer, per ERC-20.
     function _transferPipeline(address from, address to, uint256 amount) private {
         // [LOCKED] Sufficient balance check
-        if (amount == 0) revert ZeroAmount();
         if (_balances[from] < amount) revert InsufficientBalance();
         if (to == address(0)) revert ZeroAddress();
 
-        // [HOOKS - external call] Developer's pre-transfer and validation logic
+        // [HOOKS - external call] Settle-only notification, then the authoritative
+        // deny gate. A hook can refuse here; it can never write token storage.
         _hooks.beforeTransfer(from, to, amount);
         (bool valid, string memory reason) = _hooks.validateTransfer(from, to, amount);
         require(valid, reason);
@@ -173,18 +163,6 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         _balances[from] -= amount;
         _balances[to] += amount;
         emit Transfer(from, to, amount);
-
-        // [LOCKED] Holder tracking
-        if (_firstReceivedAt[to] == 0) {
-            _firstReceivedAt[to] = block.timestamp;
-            _holderCount++;
-            emit HolderAdded(to, _holderCount);
-        }
-        if (_balances[from] == 0) {
-            delete _firstReceivedAt[from];
-            _holderCount--;
-            emit HolderRemoved(from, _holderCount);
-        }
 
         // [HOOKS - external call, safe] Developer's post-transfer logic
         try _hooks.afterTransfer(from, to, amount) {}
@@ -200,7 +178,7 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     /// @notice Mint tokens. Only callable by issuer admin.
     /// @param to Recipient address.
     /// @param amount Token amount to mint.
-    /// @param data Arbitrary data forwarded to hooks (e.g., payment info, listing key).
+    /// @param data Arbitrary data forwarded to hooks.
     function mint(address to, uint256 amount, bytes calldata data) external onlyIssuerAdmin whenNotPaused nonReentrant {
         if (to == address(0)) revert ZeroAddress();
 
@@ -208,18 +186,9 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         (bool allowed, string memory reason) = _hooks.beforeMint(to, amount, data);
         require(allowed, reason);
 
-        bool wasNewHolder = (_balances[to] == 0);
-
         _totalSupply += amount;
         _balances[to] += amount;
-
         emit Transfer(address(0), to, amount);
-
-        if (wasNewHolder && _balances[to] > 0) {
-            _firstReceivedAt[to] = block.timestamp;
-            _holderCount++;
-            emit HolderAdded(to, _holderCount);
-        }
 
         // [HOOKS - external call, safe] Developer's post-mint logic
         try _hooks.afterMint(to, amount, data) {}
@@ -228,7 +197,7 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         }
     }
 
-    /// @notice Burn tokens with holder tracking. Only callable by issuer admin.
+    /// @notice Burn tokens. Only callable by issuer admin.
     function burn(address from, uint256 amount) external onlyIssuerAdmin whenNotPaused nonReentrant {
         if (_balances[from] < amount) revert InsufficientBalance();
 
@@ -240,12 +209,6 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         _totalSupply -= amount;
         emit Transfer(from, address(0), amount);
 
-        if (_balances[from] == 0) {
-            delete _firstReceivedAt[from];
-            _holderCount--;
-            emit HolderRemoved(from, _holderCount);
-        }
-
         // [HOOKS - external call, safe] Developer's post-burn logic
         try _hooks.afterBurn(from, amount) {}
         catch (bytes memory failReason) {
@@ -254,29 +217,20 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     }
 
     // =========================================================================
-    //                     HOOKS-INITIATED MINT (no beforeMint/afterMint)
+    //                     HOOKS-INITIATED MINT
     // =========================================================================
 
     /// @notice Mint tokens initiated by the hooks contract. Skips beforeMint/afterMint
     ///         callbacks to avoid circular calls.
-    /// @dev Only callable by the hooks contract.
-    /// @param to Recipient address.
-    /// @param amount Token amount to mint.
+    /// @dev Only callable by the hooks contract. This is real minting authority —
+    ///      a hooks contract that uses it MUST declare IHookMinter via ERC-165.
     function hookMint(address to, uint256 amount) external override whenNotPaused nonReentrant {
         if (msg.sender != address(_hooks)) revert NotHooksContract();
         if (to == address(0)) revert ZeroAddress();
 
-        bool wasNewHolder = (_balances[to] == 0);
-
         _totalSupply += amount;
         _balances[to] += amount;
         emit Transfer(address(0), to, amount);
-
-        if (wasNewHolder && _balances[to] > 0) {
-            _firstReceivedAt[to] = block.timestamp;
-            _holderCount++;
-            emit HolderAdded(to, _holderCount);
-        }
     }
 
     // =========================================================================
@@ -291,7 +245,7 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         return _symbol;
     }
 
-    function totalSupply() external view returns (uint256) {
+    function totalSupply() external view override returns (uint256) {
         return _totalSupply;
     }
 
@@ -303,21 +257,13 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         return _allowances[owner][spender];
     }
 
-    function holderCount() external view returns (uint256) {
-        return _holderCount;
-    }
-
-    function firstReceivedAt(address account) external view returns (uint256) {
-        return _firstReceivedAt[account];
-    }
-
     // =========================================================================
     //                     ERC165 INTERFACE SUPPORT
     // =========================================================================
 
     function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
         return interfaceId == type(IERC20).interfaceId || interfaceId == type(IIntegrityToken).interfaceId
-            || interfaceId == 0x01ffc9a7; // ERC165
+            || interfaceId == type(IERC165).interfaceId;
     }
 
     // =========================================================================
@@ -340,6 +286,7 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     {
         if (_isPaused()) return (false, "Token is paused");
         if (_balances[from] < amount) return (false, "Insufficient balance");
+        if (to == address(0)) return (false, "Zero recipient");
         (bool valid, string memory validationReason) = _hooks.validateTransfer(from, to, amount);
         if (!valid) return (false, validationReason);
         return (true, "");

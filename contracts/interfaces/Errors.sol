@@ -3,7 +3,6 @@ pragma solidity ^0.8.34;
 
 // ─── General ─────────────────────────────────────────────────────────────────
 error ZeroAddress();
-error ZeroAmount();
 error LengthMismatch();
 
 // ─── Balances / allowances ───────────────────────────────────────────────────
@@ -27,7 +26,6 @@ error NotERC1155Receiver();
 
 // ─── Hooks ───────────────────────────────────────────────────────────────────
 error NotHooksContract();
-error ReentrantHookMint();
 
 // ─── Royalty ─────────────────────────────────────────────────────────────────
 error RoyaltyTooHigh();
@@ -37,9 +35,3 @@ error NotIssuerAdmin();
 error TokenPaused();
 error AlreadyPaused();
 error NotPaused();
-
-// ─── Flags (anti-fraud integrity system) ─────────────────────────────────────
-error UndefinedFlagBits();
-error FlagAlreadyDefined();
-error EmptyFlagLabel();
-error FlagsAlreadyCommitted();

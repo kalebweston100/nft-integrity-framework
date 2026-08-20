@@ -5,21 +5,18 @@ import "../hooks/HooksERC721.sol";
 
 /**
  * @title TestHooksERC721
- * @notice Concrete ERC-721 hooks for testing. Records every accessible hook invocation
- *         and exposes admin toggles to drive every branch in the token's pipeline.
+ * @notice Concrete ERC-721 hooks for testing. Records every hook invocation and
+ *         exposes admin toggles to drive every branch in the token's pipeline.
  *
- * HOOK COVERAGE:
- *   beforeTransfer  – recorded; optional revert to test transfer blocking
- *   beforeMint      – recorded; optional (false, reason) to test mint blocking
- *   beforeBurn      – recorded; optional (false, reason) to test burn blocking
- *   hookMint path      – issuerMint() exercises IntegrityERC721.hookMint()
+ * Inherits HooksERC721Minter, so it declares IHookMinter via ERC-165 and can
+ * exercise IntegrityERC721.hookMint(). A hooks contract that does NOT need
+ * minting authority should inherit plain HooksERC721 instead.
  *
- * LIMITATIONS:
- *   validateTransfer, afterTransfer, afterMint, afterBurn,
- *   beforeSetBaseURI, afterSetBaseURI, onTransferBlocked are not virtual in
- *   HooksERC721 and cannot be overridden; test those paths via token-side effects.
+ * Note that transfer denial goes through _onValidateTransfer, the authoritative
+ * deny gate — not through a revert in _onBeforeTransfer, which IHooksERC20 rule 2
+ * reserves for settle-only notification.
  */
-contract TestHooksERC721 is HooksERC721 {
+contract TestHooksERC721 is HooksERC721Minter {
     // ─── Call Record Structs ─────────────────────────────────────────────────
 
     struct TransferRecord {
@@ -40,19 +37,28 @@ contract TestHooksERC721 is HooksERC721 {
     // ─── Call Logs ───────────────────────────────────────────────────────────
 
     TransferRecord[] public beforeTransferLog;
+    TransferRecord[] public afterTransferLog;
     MintRecord[] public beforeMintLog;
+    MintRecord[] public afterMintLog;
     BurnRecord[] public beforeBurnLog;
+    BurnRecord[] public afterBurnLog;
+
+    string public lastBaseURISeen;
+    uint256 public afterSetTokenURICount;
 
     // ─── Behavior Flags ──────────────────────────────────────────────────────
 
-    bool public revertOnTransfer;
-    string public transferRevertReason = "TestHooks: transfer blocked";
+    bool public blockTransfers;
+    string public blockTransferReason = "TestHooks: transfer blocked";
 
     bool public blockMints;
     string public blockMintReason = "TestHooks: mint blocked";
 
     bool public blockBurns;
     string public blockBurnReason = "TestHooks: burn blocked";
+
+    bool public blockBaseURI;
+    bool public revertInAfterHooks;
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
@@ -62,45 +68,53 @@ contract TestHooksERC721 is HooksERC721 {
         string memory tokenSymbol,
         string memory contractURI_,
         string memory baseURI_
-    ) HooksERC721(_issuerAdmin, tokenName, tokenSymbol, contractURI_, baseURI_) {}
+    ) HooksERC721Minter(_issuerAdmin, tokenName, tokenSymbol, contractURI_, baseURI_) {}
 
     // ─── Admin Controls ──────────────────────────────────────────────────────
 
-    /// @notice Toggle whether beforeTransfer reverts (blocks all transfers via hook).
-    function setRevertOnTransfer(bool blocked, string calldata reason) external onlyIssuerAdmin {
-        revertOnTransfer = blocked;
-        transferRevertReason = reason;
+    function setBlockTransfers(bool blocked, string calldata reason) external onlyIssuerAdmin {
+        blockTransfers = blocked;
+        blockTransferReason = reason;
     }
 
-    /// @notice Toggle whether beforeMint returns (false, reason) (blocks all mints via hook).
     function setBlockMints(bool blocked, string calldata reason) external onlyIssuerAdmin {
         blockMints = blocked;
         blockMintReason = reason;
     }
 
-    /// @notice Toggle whether beforeBurn returns (false, reason) (blocks all burns via hook).
     function setBlockBurns(bool blocked, string calldata reason) external onlyIssuerAdmin {
         blockBurns = blocked;
         blockBurnReason = reason;
     }
 
-    /// @notice Exercises IntegrityERC721.hookMint() — direct hook-gated mint by tokenId.
-    function issuerMint(address to, uint256 tokenId, uint256 flags, bytes32 metadataHash) external onlyIssuerAdmin {
-        _mintFromHooks(to, tokenId, flags, metadataHash);
+    function setBlockBaseURI(bool blocked) external onlyIssuerAdmin {
+        blockBaseURI = blocked;
     }
 
-    // ─── Hook Overrides ──────────────────────────────────────────────────────
-
-    function _onBeforeTransfer(address from, address to, uint256 tokenId) internal override {
-        beforeTransferLog.push(TransferRecord(from, to, tokenId));
-        if (revertOnTransfer) revert(transferRevertReason);
+    /// @notice Make every after-hook revert, to prove the token's try/catch keeps
+    ///         a broken hooks contract from bricking the token.
+    function setRevertInAfterHooks(bool enabled) external onlyIssuerAdmin {
+        revertInAfterHooks = enabled;
     }
 
-    function _onBeforeMint(
-        address to,
-        uint256 tokenId,
-        bytes calldata /*data*/
-    )
+    /// @notice Exercises IntegrityERC721.hookMint() — hook-initiated mint.
+    function issuerMint(address to, uint256 tokenId) external onlyIssuerAdmin {
+        _mintFromHooks(to, tokenId);
+    }
+
+    /// @notice Exercises IntegrityERC721.hookSetTokenURI().
+    function issuerSetTokenURI(uint256 tokenId, string calldata newURI) external onlyIssuerAdmin {
+        _setTokenURIFromHooks(tokenId, newURI);
+    }
+
+    // ─── Deny Gates ──────────────────────────────────────────────────────────
+
+    function _onValidateTransfer(address, address, uint256) internal view override returns (bool, string memory) {
+        if (blockTransfers) return (false, blockTransferReason);
+        return (true, "");
+    }
+
+    function _onBeforeMint(address to, uint256 tokenId, bytes calldata)
         internal
         override
         returns (bool, string memory)
@@ -116,18 +130,64 @@ contract TestHooksERC721 is HooksERC721 {
         return (true, "");
     }
 
+    function _onBeforeSetBaseURI(string calldata) internal view override returns (bool, string memory) {
+        if (blockBaseURI) return (false, "TestHooks: baseURI locked");
+        return (true, "");
+    }
+
+    // ─── Notifications ───────────────────────────────────────────────────────
+
+    function _onBeforeTransfer(address from, address to, uint256 tokenId) internal override {
+        beforeTransferLog.push(TransferRecord(from, to, tokenId));
+    }
+
+    function _onAfterTransfer(address from, address to, uint256 tokenId) internal override {
+        require(!revertInAfterHooks, "TestHooks: afterTransfer exploded");
+        afterTransferLog.push(TransferRecord(from, to, tokenId));
+    }
+
+    function _onAfterMint(address to, uint256 tokenId, bytes calldata) internal override {
+        require(!revertInAfterHooks, "TestHooks: afterMint exploded");
+        afterMintLog.push(MintRecord(to, tokenId));
+    }
+
+    function _onAfterBurn(uint256 tokenId) internal override {
+        require(!revertInAfterHooks, "TestHooks: afterBurn exploded");
+        afterBurnLog.push(BurnRecord(tokenId));
+    }
+
+    function _onAfterSetBaseURI(string calldata newBaseURI) internal override {
+        lastBaseURISeen = newBaseURI;
+    }
+
+    function _onAfterSetTokenURI(uint256, string calldata) internal override {
+        afterSetTokenURICount++;
+    }
+
     // ─── View Helpers ─────────────────────────────────────────────────────────
 
     function beforeTransferCount() external view returns (uint256) {
         return beforeTransferLog.length;
     }
 
+    function afterTransferCount() external view returns (uint256) {
+        return afterTransferLog.length;
+    }
+
     function beforeMintCount() external view returns (uint256) {
         return beforeMintLog.length;
     }
 
+    function afterMintCount() external view returns (uint256) {
+        return afterMintLog.length;
+    }
+
     function beforeBurnCount() external view returns (uint256) {
         return beforeBurnLog.length;
+    }
+
+    function afterBurnCount() external view returns (uint256) {
+        return afterBurnLog.length;
     }
 
     function lastBeforeTransfer() external view returns (TransferRecord memory) {

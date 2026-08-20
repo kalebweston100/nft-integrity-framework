@@ -41,8 +41,6 @@ abstract contract IntegrityTokenBase is IIntegrityToken, TokenAdmin, ReentrancyG
     //                     COLLECTION METADATA
     // =========================================================================
 
-    uint256 private _issuedAt;
-
     /// @notice Collection-level metadata URI (e.g., OpenSea collection metadata).
     string private _contractURI;
 
@@ -53,7 +51,6 @@ abstract contract IntegrityTokenBase is IIntegrityToken, TokenAdmin, ReentrancyG
     /// @param admin The initial issuer admin address.
     /// @param initialContractURI Collection-level metadata URI.
     constructor(address admin, string memory initialContractURI) TokenAdmin(admin) {
-        _issuedAt = block.timestamp;
         _contractURI = initialContractURI;
     }
 
@@ -83,12 +80,4 @@ abstract contract IntegrityTokenBase is IIntegrityToken, TokenAdmin, ReentrancyG
     }
 
     event ContractURIUpdated(string newContractURI);
-
-    // =========================================================================
-    //                          VIEW FUNCTIONS
-    // =========================================================================
-
-    function issuedAt() external view returns (uint256) {
-        return _issuedAt;
-    }
 }
