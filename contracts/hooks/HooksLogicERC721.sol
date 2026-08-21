@@ -14,8 +14,8 @@ import "./HooksWrapperERC721.sol";
  *
  * CALL DIRECTION: the wrapper calls this contract (gated `onlyWrapper`); this
  * contract never calls back into the wrapper or the token. There is no
- * hook-initiated write path anywhere in this framework — mint/burn and metadata
- * writes are exclusively issuer-admin-gated on the token. See IntegrityERC721.sol.
+ * hook-initiated write path anywhere in this framework — mint/burn are
+ * exclusively issuer-admin-gated on the token. See IntegrityERC721.sol.
  *
  * EXTENSION:
  *   Every hook has an internal `virtual` counterpart. Override the `_on*`
@@ -27,12 +27,10 @@ import "./HooksWrapperERC721.sol";
  *       _onValidateTransfer  → return (false, reason) to block a transfer
  *       _onBeforeMint        → return (false, reason) to block a mint
  *       _onBeforeBurn        → return (false, reason) to block a burn
- *       _onBeforeSetBaseURI / _onBeforeSetTokenURI
  *
  *     Notifications (fail-open, try/catch-wrapped by the token around the
  *     entire Token → Wrapper → Logic call chain):
- *       _onBeforeTransfer, _onAfterTransfer, _onAfterMint, _onAfterBurn,
- *       _onAfterSetBaseURI, _onAfterSetTokenURI
+ *       _onBeforeTransfer, _onAfterTransfer, _onAfterMint, _onAfterBurn
  *
  *   Use _onValidateTransfer — not a revert in _onBeforeTransfer — to deny a
  *   transfer. beforeTransfer is a settle-only notification per IHooksERC20 rule 2.
@@ -144,51 +142,4 @@ abstract contract HooksLogicERC721 is HooksAdmin {
     }
 
     function _onAfterBurn(uint256 tokenId) internal virtual {}
-
-    // =========================================================================
-    //                          METADATA
-    // =========================================================================
-
-    function beforeSetBaseURI(string calldata newBaseURI)
-        external
-        view
-        onlyWrapper
-        returns (bool allowed, string memory reason)
-    {
-        return _onBeforeSetBaseURI(newBaseURI);
-    }
-
-    function _onBeforeSetBaseURI(string calldata newBaseURI) internal view virtual returns (bool, string memory) {
-        return (true, "");
-    }
-
-    function afterSetBaseURI(string calldata newBaseURI) external onlyWrapper {
-        _onAfterSetBaseURI(newBaseURI);
-    }
-
-    function _onAfterSetBaseURI(string calldata newBaseURI) internal virtual {}
-
-    function beforeSetTokenURI(uint256 tokenId, string calldata newURI)
-        external
-        view
-        onlyWrapper
-        returns (bool allowed, string memory reason)
-    {
-        return _onBeforeSetTokenURI(tokenId, newURI);
-    }
-
-    function _onBeforeSetTokenURI(uint256 tokenId, string calldata newURI)
-        internal
-        view
-        virtual
-        returns (bool, string memory)
-    {
-        return (true, "");
-    }
-
-    function afterSetTokenURI(uint256 tokenId, string calldata newURI) external onlyWrapper {
-        _onAfterSetTokenURI(tokenId, newURI);
-    }
-
-    function _onAfterSetTokenURI(uint256 tokenId, string calldata newURI) internal virtual {}
 }

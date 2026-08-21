@@ -191,14 +191,8 @@ contract IntegrityERC1155Test is Fixtures {
 
     // ─── Metadata / introspection ────────────────────────────────────────────
 
-    function test_uri_fallsBackToBase() public view {
+    function test_uri_returnsBaseURITemplate() public view {
         assertEq(token.uri(1), "ipfs://base/{id}");
-    }
-
-    function test_uri_overrideWins() public {
-        vm.prank(admin);
-        token.setTokenURI(1, "ipfs://custom");
-        assertEq(token.uri(1), "ipfs://custom");
     }
 
     function test_supportsInterface() public view {

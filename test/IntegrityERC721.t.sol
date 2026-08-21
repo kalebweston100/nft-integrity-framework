@@ -198,28 +198,10 @@ contract IntegrityERC721Test is Fixtures {
 
     // ─── Metadata ────────────────────────────────────────────────────────────
 
-    function test_tokenURI_fallsBackToBaseURI() public {
+    function test_tokenURI_isBaseURIPlusTokenId() public {
         vm.prank(admin);
         token.mint(alice, 42, "");
         assertEq(token.tokenURI(42), "ipfs://base/42");
-    }
-
-    function test_tokenURI_overrideWins() public {
-        vm.startPrank(admin);
-        token.mint(alice, 42, "");
-        token.setTokenURI(42, "ipfs://custom");
-        vm.stopPrank();
-
-        assertEq(token.tokenURI(42), "ipfs://custom");
-        assertEq(hooks.afterSetTokenURICount(), 1);
-    }
-
-    function test_hook_canBlockBaseURIChange() public {
-        vm.startPrank(admin);
-        hooks.setBlockBaseURI(true);
-        vm.expectRevert(bytes("TestHooks: baseURI locked"));
-        token.setBaseURI("ipfs://new/");
-        vm.stopPrank();
     }
 
     // ─── Royalties / introspection ───────────────────────────────────────────

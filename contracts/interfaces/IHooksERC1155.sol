@@ -19,9 +19,7 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  * No separate batch hooks: the token's batch mint/burn/transfer entry points
  * (mintBatch, burnBatch, safeBatchTransferFrom) each loop and fire these same
  * single-item hooks once per item — there is no distinct batch code path to
- * standardize. The URI metadata hooks are additional, framework-specific surface a
- * conforming contract may expose beyond this interface's minimum; they aren't
- * part of it.
+ * standardize.
  */
 interface IHooksERC1155 is IERC165 {
     // =========================================================================

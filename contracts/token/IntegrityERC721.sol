@@ -45,8 +45,6 @@ contract IntegrityERC721 is IERC721, IERC721Metadata, IERC2981, IntegrityTokenBa
 
     event HookCallFailed(string hookName, bytes reason);
     event DefaultRoyaltyUpdated(address indexed receiver, uint96 feeNumerator);
-    event BaseURIUpdated(string newBaseURI);
-    event TokenURIUpdated(uint256 indexed tokenId, string newTokenURI);
 
     // =========================================================================
     //                     WRAPPER CONTRACT (plain storage, setter-less)
@@ -82,7 +80,6 @@ contract IntegrityERC721 is IERC721, IERC721Metadata, IERC2981, IntegrityTokenBa
     // =========================================================================
 
     string private _baseURI;
-    mapping(uint256 => string) private _tokenURIs;
 
     // =========================================================================
     //                          CONSTRUCTOR
@@ -223,7 +220,6 @@ contract IntegrityERC721 is IERC721, IERC721Metadata, IERC2981, IntegrityTokenBa
         require(allowed, reason);
 
         delete _tokenApprovals[tokenId];
-        delete _tokenURIs[tokenId];
         _balances[tokenOwner] -= 1;
         delete _owners[tokenId];
         _totalSupply -= 1;
@@ -272,41 +268,6 @@ contract IntegrityERC721 is IERC721, IERC721Metadata, IERC2981, IntegrityTokenBa
     {
         receiver = _royaltyReceiver;
         royaltyAmount = (salePrice * _royaltyFeeNumerator) / 10000;
-    }
-
-    // =========================================================================
-    //                     METADATA: BASE URI
-    // =========================================================================
-
-    /// @notice Set the base URI for token metadata. Only callable by issuer admin.
-    function setBaseURI(string calldata newBaseURI) external onlyIssuerAdmin {
-        (bool allowed, string memory reason) = _hooks.beforeSetBaseURI(newBaseURI);
-        require(allowed, reason);
-
-        _baseURI = newBaseURI;
-        emit BaseURIUpdated(newBaseURI);
-
-        try _hooks.afterSetBaseURI(newBaseURI) {}
-        catch (bytes memory failReason) {
-            emit HookCallFailed("afterSetBaseURI", failReason);
-        }
-    }
-
-    /// @notice Set a per-token URI override. Empty string clears the override,
-    ///         reverting to baseURI + tokenId for that token. Only callable by issuer admin.
-    function setTokenURI(uint256 tokenId, string calldata newTokenURI) external onlyIssuerAdmin {
-        if (_owners[tokenId] == address(0)) revert NonexistentToken();
-
-        (bool allowed, string memory reason) = _hooks.beforeSetTokenURI(tokenId, newTokenURI);
-        require(allowed, reason);
-
-        _tokenURIs[tokenId] = newTokenURI;
-        emit TokenURIUpdated(tokenId, newTokenURI);
-
-        try _hooks.afterSetTokenURI(tokenId, newTokenURI) {}
-        catch (bytes memory failReason) {
-            emit HookCallFailed("afterSetTokenURI721", failReason);
-        }
     }
 
     // =========================================================================
@@ -374,12 +335,9 @@ contract IntegrityERC721 is IERC721, IERC721Metadata, IERC2981, IntegrityTokenBa
         return _operatorApprovals[owner][operator];
     }
 
-    /// @notice Returns the metadata URI for a given token ID.
-    ///         Returns the per-token override if set; otherwise falls back to baseURI + tokenId.
+    /// @notice Returns the metadata URI for a given token ID: baseURI + tokenId.
     function tokenURI(uint256 tokenId) external view override returns (string memory) {
         if (_owners[tokenId] == address(0)) revert NonexistentToken();
-        string memory override_ = _tokenURIs[tokenId];
-        if (bytes(override_).length > 0) return override_;
         string memory base = _baseURI;
         return bytes(base).length > 0 ? string(abi.encodePacked(base, _toString(tokenId))) : "";
     }

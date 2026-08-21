@@ -93,8 +93,8 @@ exists but isn't wired.
 non-zero wrapper address — the token only exists because that address called
 `new` on it — and the wrapper and logic contracts have no entry point through
 which they could write token state even if they wanted to. There is no
-hook-initiated mint, no hook-initiated metadata write, nothing. Mint and burn
-are exclusively `onlyIssuerAdmin`-gated on the token, unconditionally.
+hook-initiated mint, nothing. Mint and burn are exclusively
+`onlyIssuerAdmin`-gated on the token, unconditionally.
 
 ## Core concepts
 
@@ -123,8 +123,8 @@ non-virtual so an override cannot remove that check.
 
 | Kind | Functions | Behaviour |
 |---|---|---|
-| Deny gates | `_onValidateTransfer`, `_onBeforeMint`, `_onBeforeBurn`, `_onBeforeSet*URI` | Fail-closed. Return `(false, reason)` to block. |
-| Notifications | `_onBeforeTransfer`, `_onAfterTransfer`, `_onAfterMint`, `_onAfterBurn`, `_onAfterSet*URI` | Fail-open. `after*` is try/catch-wrapped by the token around the entire Wrapper → Logic call chain — a bug anywhere downstream can't brick the token. |
+| Deny gates | `_onValidateTransfer`, `_onBeforeMint`, `_onBeforeBurn` | Fail-closed. Return `(false, reason)` to block. |
+| Notifications | `_onBeforeTransfer`, `_onAfterTransfer`, `_onAfterMint`, `_onAfterBurn` | Fail-open. `after*` is try/catch-wrapped by the token around the entire Wrapper → Logic call chain — a bug anywhere downstream can't brick the token. |
 
 Deny a transfer through `_onValidateTransfer`, not by reverting in
 `_onBeforeTransfer` — `beforeTransfer` is a settle-only notification.

@@ -6,30 +6,6 @@ import "../token/IntegrityERC20.sol";
 import "../interfaces/IHooksERC20.sol";
 
 /**
- * @dev The full surface a HooksLogicERC20 must expose, used only so this file can
- *      cast `logic` to a typed interface when forwarding. Deliberately NOT
- *      `IERC165` — HooksLogicERC20 is never independently discovered (nothing
- *      but this wrapper ever calls it), so it has no reason to carry ERC-165
- *      obligations. HooksLogicERC20 does not need to formally declare `is
- *      ILogicERC20`; Solidity resolves the call by selector, not by declared
- *      inheritance, so matching function signatures are all that's required.
- */
-interface ILogicERC20 {
-    function beforeTransfer(address from, address to, uint256 amount) external;
-    function validateTransfer(address from, address to, uint256 amount)
-        external
-        view
-        returns (bool allowed, string memory reason);
-    function afterTransfer(address from, address to, uint256 amount) external;
-    function beforeMint(address to, uint256 amount, bytes calldata data)
-        external
-        returns (bool allowed, string memory reason);
-    function afterMint(address to, uint256 amount, bytes calldata data) external;
-    function beforeBurn(address from, uint256 amount) external returns (bool allowed, string memory reason);
-    function afterBurn(address from, uint256 amount) external;
-}
-
-/**
  * @title HooksWrapperERC20
  * @notice The canonical, un-inherited contract that sits between an
  *         IntegrityERC20 token and a developer's custom HooksLogicERC20 contract.
@@ -87,7 +63,7 @@ contract HooksWrapperERC20 is IHooksERC20, ERC165 {
     // =========================================================================
 
     function beforeTransfer(address from, address to, uint256 amount) external override onlyToken {
-        ILogicERC20(logic).beforeTransfer(from, to, amount);
+        IHooksERC20(logic).beforeTransfer(from, to, amount);
     }
 
     function validateTransfer(address from, address to, uint256 amount)
@@ -97,11 +73,11 @@ contract HooksWrapperERC20 is IHooksERC20, ERC165 {
         onlyToken
         returns (bool valid, string memory reason)
     {
-        return ILogicERC20(logic).validateTransfer(from, to, amount);
+        return IHooksERC20(logic).validateTransfer(from, to, amount);
     }
 
     function afterTransfer(address from, address to, uint256 amount) external override onlyToken {
-        ILogicERC20(logic).afterTransfer(from, to, amount);
+        IHooksERC20(logic).afterTransfer(from, to, amount);
     }
 
     // =========================================================================
@@ -114,11 +90,11 @@ contract HooksWrapperERC20 is IHooksERC20, ERC165 {
         onlyToken
         returns (bool allowed, string memory reason)
     {
-        return ILogicERC20(logic).beforeMint(to, amount, data);
+        return IHooksERC20(logic).beforeMint(to, amount, data);
     }
 
     function afterMint(address to, uint256 amount, bytes calldata data) external override onlyToken {
-        ILogicERC20(logic).afterMint(to, amount, data);
+        IHooksERC20(logic).afterMint(to, amount, data);
     }
 
     // =========================================================================
@@ -131,10 +107,10 @@ contract HooksWrapperERC20 is IHooksERC20, ERC165 {
         onlyToken
         returns (bool allowed, string memory reason)
     {
-        return ILogicERC20(logic).beforeBurn(from, amount);
+        return IHooksERC20(logic).beforeBurn(from, amount);
     }
 
     function afterBurn(address from, uint256 amount) external override onlyToken {
-        ILogicERC20(logic).afterBurn(from, amount);
+        IHooksERC20(logic).afterBurn(from, amount);
     }
 }

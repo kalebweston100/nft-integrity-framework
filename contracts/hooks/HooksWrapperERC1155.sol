@@ -6,35 +6,6 @@ import "../token/IntegrityERC1155.sol";
 import "../interfaces/IHooksERC1155.sol";
 
 /**
- * @dev The full surface a HooksLogicERC1155 must expose, used only so this file
- *      can cast `logic` to a typed interface when forwarding. Deliberately NOT
- *      `IERC165` — see HooksWrapperERC20's ILogicERC20 for why. Includes the URI
- *      metadata hooks alongside the core IHooksERC1155 shape, since the wrapper
- *      must forward those too and they aren't part of the public interface.
- */
-interface ILogicERC1155 {
-    function beforeTransfer(address from, address to, uint256 id, uint256 amount) external;
-    function validateTransfer(address from, address to, uint256 id, uint256 amount)
-        external
-        view
-        returns (bool allowed, string memory reason);
-    function afterTransfer(address from, address to, uint256 id, uint256 amount) external;
-    function beforeMint(address to, uint256 id, uint256 amount, bytes calldata data)
-        external
-        returns (bool allowed, string memory reason);
-    function afterMint(address to, uint256 id, uint256 amount, bytes calldata data) external;
-    function beforeBurn(address from, uint256 id, uint256 amount) external returns (bool allowed, string memory reason);
-    function afterBurn(address from, uint256 id, uint256 amount) external;
-    function beforeSetURI(string calldata newUri) external view returns (bool allowed, string memory reason);
-    function afterSetURI(string calldata newUri) external;
-    function beforeSetTokenURI(uint256 id, string calldata newURI)
-        external
-        view
-        returns (bool allowed, string memory reason);
-    function afterSetTokenURI(uint256 id, string calldata newURI) external;
-}
-
-/**
  * @title HooksWrapperERC1155
  * @notice The canonical, un-inherited contract that sits between an
  *         IntegrityERC1155 token and a developer's custom HooksLogicERC1155
@@ -87,7 +58,7 @@ contract HooksWrapperERC1155 is IHooksERC1155, ERC165 {
     // =========================================================================
 
     function beforeTransfer(address from, address to, uint256 id, uint256 amount) external override onlyToken {
-        ILogicERC1155(logic).beforeTransfer(from, to, id, amount);
+        IHooksERC1155(logic).beforeTransfer(from, to, id, amount);
     }
 
     function validateTransfer(address from, address to, uint256 id, uint256 amount)
@@ -97,11 +68,11 @@ contract HooksWrapperERC1155 is IHooksERC1155, ERC165 {
         onlyToken
         returns (bool valid, string memory reason)
     {
-        return ILogicERC1155(logic).validateTransfer(from, to, id, amount);
+        return IHooksERC1155(logic).validateTransfer(from, to, id, amount);
     }
 
     function afterTransfer(address from, address to, uint256 id, uint256 amount) external override onlyToken {
-        ILogicERC1155(logic).afterTransfer(from, to, id, amount);
+        IHooksERC1155(logic).afterTransfer(from, to, id, amount);
     }
 
     // =========================================================================
@@ -114,11 +85,11 @@ contract HooksWrapperERC1155 is IHooksERC1155, ERC165 {
         onlyToken
         returns (bool allowed, string memory reason)
     {
-        return ILogicERC1155(logic).beforeMint(to, id, amount, data);
+        return IHooksERC1155(logic).beforeMint(to, id, amount, data);
     }
 
     function afterMint(address to, uint256 id, uint256 amount, bytes calldata data) external override onlyToken {
-        ILogicERC1155(logic).afterMint(to, id, amount, data);
+        IHooksERC1155(logic).afterMint(to, id, amount, data);
     }
 
     // =========================================================================
@@ -131,35 +102,10 @@ contract HooksWrapperERC1155 is IHooksERC1155, ERC165 {
         onlyToken
         returns (bool allowed, string memory reason)
     {
-        return ILogicERC1155(logic).beforeBurn(from, id, amount);
+        return IHooksERC1155(logic).beforeBurn(from, id, amount);
     }
 
     function afterBurn(address from, uint256 id, uint256 amount) external override onlyToken {
-        ILogicERC1155(logic).afterBurn(from, id, amount);
-    }
-
-    // =========================================================================
-    //                          METADATA
-    // =========================================================================
-
-    function beforeSetURI(string calldata newUri) external view onlyToken returns (bool allowed, string memory reason) {
-        return ILogicERC1155(logic).beforeSetURI(newUri);
-    }
-
-    function afterSetURI(string calldata newUri) external onlyToken {
-        ILogicERC1155(logic).afterSetURI(newUri);
-    }
-
-    function beforeSetTokenURI(uint256 id, string calldata newURI)
-        external
-        view
-        onlyToken
-        returns (bool allowed, string memory reason)
-    {
-        return ILogicERC1155(logic).beforeSetTokenURI(id, newURI);
-    }
-
-    function afterSetTokenURI(uint256 id, string calldata newURI) external onlyToken {
-        ILogicERC1155(logic).afterSetTokenURI(id, newURI);
+        IHooksERC1155(logic).afterBurn(from, id, amount);
     }
 }

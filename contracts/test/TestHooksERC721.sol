@@ -41,9 +41,6 @@ contract TestHooksERC721 is HooksLogicERC721 {
     BurnRecord[] public beforeBurnLog;
     BurnRecord[] public afterBurnLog;
 
-    string public lastBaseURISeen;
-    uint256 public afterSetTokenURICount;
-
     // ─── Behavior Flags ──────────────────────────────────────────────────────
 
     bool public blockTransfers;
@@ -55,7 +52,6 @@ contract TestHooksERC721 is HooksLogicERC721 {
     bool public blockBurns;
     string public blockBurnReason = "TestHooks: burn blocked";
 
-    bool public blockBaseURI;
     bool public revertInAfterHooks;
 
     // ─── Constructor ─────────────────────────────────────────────────────────
@@ -83,10 +79,6 @@ contract TestHooksERC721 is HooksLogicERC721 {
     function setBlockBurns(bool blocked, string calldata reason) external onlyIssuerAdmin {
         blockBurns = blocked;
         blockBurnReason = reason;
-    }
-
-    function setBlockBaseURI(bool blocked) external onlyIssuerAdmin {
-        blockBaseURI = blocked;
     }
 
     /// @notice Make every after-hook revert, to prove the token's try/catch keeps
@@ -118,11 +110,6 @@ contract TestHooksERC721 is HooksLogicERC721 {
         return (true, "");
     }
 
-    function _onBeforeSetBaseURI(string calldata) internal view override returns (bool, string memory) {
-        if (blockBaseURI) return (false, "TestHooks: baseURI locked");
-        return (true, "");
-    }
-
     // ─── Notifications ───────────────────────────────────────────────────────
 
     function _onBeforeTransfer(address from, address to, uint256 tokenId) internal override {
@@ -142,14 +129,6 @@ contract TestHooksERC721 is HooksLogicERC721 {
     function _onAfterBurn(uint256 tokenId) internal override {
         require(!revertInAfterHooks, "TestHooks: afterBurn exploded");
         afterBurnLog.push(BurnRecord(tokenId));
-    }
-
-    function _onAfterSetBaseURI(string calldata newBaseURI) internal override {
-        lastBaseURISeen = newBaseURI;
-    }
-
-    function _onAfterSetTokenURI(uint256, string calldata) internal override {
-        afterSetTokenURICount++;
     }
 
     // ─── View Helpers ─────────────────────────────────────────────────────────

@@ -17,9 +17,7 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  *         direction only: Token → Wrapper → Logic, never back.
  *
  * Burn takes only `tokenId`, not `from` — ownership is resolved via `ownerOf`
- * internally rather than trusted from the caller. The base-URI / token-URI metadata
- * hooks are additional framework-specific surface a conforming contract may expose
- * beyond this interface's minimum; they are not part of it.
+ * internally rather than trusted from the caller.
  */
 interface IHooksERC721 is IERC165 {
     // =========================================================================

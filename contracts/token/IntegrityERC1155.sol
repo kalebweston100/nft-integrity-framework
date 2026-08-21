@@ -45,8 +45,6 @@ contract IntegrityERC1155 is IERC1155, IERC1155MetadataURI, IERC2981, IntegrityT
 
     event HookCallFailed(string hookName, bytes reason);
     event DefaultRoyaltyUpdated(address indexed receiver, uint96 feeNumerator);
-    event URIUpdated(string newURI);
-    event TokenURIUpdated(uint256 indexed id, string newTokenURI);
 
     // =========================================================================
     //                     WRAPPER CONTRACT (plain storage, setter-less)
@@ -61,7 +59,6 @@ contract IntegrityERC1155 is IERC1155, IERC1155MetadataURI, IERC2981, IntegrityT
     // =========================================================================
 
     string private _uri;
-    mapping(uint256 => string) private _tokenURIs;
 
     mapping(uint256 => mapping(address => uint256)) private _balances;
     mapping(address => mapping(address => bool)) private _operatorApprovals;
@@ -294,39 +291,6 @@ contract IntegrityERC1155 is IERC1155, IERC1155MetadataURI, IERC2981, IntegrityT
     }
 
     // =========================================================================
-    //                     METADATA
-    // =========================================================================
-
-    /// @notice Set the base URI. Only callable by issuer admin.
-    function setURI(string calldata newuri) external onlyIssuerAdmin {
-        (bool allowed, string memory reason) = _hooks.beforeSetURI(newuri);
-        require(allowed, reason);
-
-        _uri = newuri;
-        emit URIUpdated(newuri);
-
-        try _hooks.afterSetURI(newuri) {}
-        catch (bytes memory failReason) {
-            emit HookCallFailed("afterSetURI", failReason);
-        }
-    }
-
-    /// @notice Set a per-token-ID URI override. Empty string clears the override,
-    ///         reverting to the base URI template for that ID. Only callable by issuer admin.
-    function setTokenURI(uint256 id, string calldata newTokenURI) external onlyIssuerAdmin {
-        (bool allowed, string memory reason) = _hooks.beforeSetTokenURI(id, newTokenURI);
-        require(allowed, reason);
-
-        _tokenURIs[id] = newTokenURI;
-        emit TokenURIUpdated(id, newTokenURI);
-
-        try _hooks.afterSetTokenURI(id, newTokenURI) {}
-        catch (bytes memory failReason) {
-            emit HookCallFailed("afterSetTokenURI1155", failReason);
-        }
-    }
-
-    // =========================================================================
     //                     ERC-2981 ROYALTIES
     // =========================================================================
 
@@ -379,11 +343,9 @@ contract IntegrityERC1155 is IERC1155, IERC1155MetadataURI, IERC2981, IntegrityT
         return _operatorApprovals[account][operator];
     }
 
-    /// @notice Returns the metadata URI for a given token ID.
-    ///         Returns the per-token override if set; otherwise the base URI template.
-    function uri(uint256 id) external view override returns (string memory) {
-        string memory override_ = _tokenURIs[id];
-        return bytes(override_).length > 0 ? override_ : _uri;
+    /// @notice Returns the metadata URI template shared by all token IDs.
+    function uri(uint256) external view override returns (string memory) {
+        return _uri;
     }
 
     /// @notice Circulating supply of a single token id.
