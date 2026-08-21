@@ -10,9 +10,9 @@ import "../hooks/HooksLogicERC721.sol";
  *         token's pipeline. Deployed as Logic → Wrapper → Token; this contract
  *         never calls the wrapper or token — the wrapper calls it.
  *
- * Note that transfer denial goes through _onValidateTransfer, the authoritative
- * deny gate — not through a revert in _onBeforeTransfer, which IHooksERC20 rule 2
- * reserves for settle-only notification.
+ * Transfer denial goes through _onValidateTransfer, the authoritative deny gate —
+ * not through a revert in _onBeforeTransfer, which IHooksERC20 rule 2 reserves for
+ * settle-only notification.
  */
 contract TestHooksERC721 is HooksLogicERC721 {
     // ─── Call Record Structs ─────────────────────────────────────────────────

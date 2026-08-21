@@ -15,28 +15,27 @@ registry, and no admin key to trust** — the expected bytecode hash is derived
 at compile time by whoever is doing the checking. See "Verifying a deployment"
 below; it's the most interesting idea in this repository.
 
-> **Status: pre-audit.** The contracts are implemented, tested (70 tests, CI on
+> **Status: pre-audit.** The contracts are implemented, tested (67 tests, CI on
 > every push), and internally consistent, but there has been no external
 > security review. Do not deploy real value on top of this yet.
 
 ## Why
 
-Most "compliance hook" or "extension point" patterns for tokens give the
-extension full access to token storage, which means a badly written or
-malicious hook can bypass the very rules it was meant to enforce. This
-framework inverts that: the token contract owns all state and the transfer
-pipeline; the hooks layer is a separate deployment that the token calls
-externally and which can only **deny** — it has no path to mutate balances or
-ownership, and no path to call the token at all. Calls flow in exactly one
-direction, always: Token → Wrapper → Logic. Nothing downstream ever calls back.
+Most "compliance hook" patterns give the extension full access to token
+storage, so a badly written or malicious hook can bypass the very rules it's
+meant to enforce. This framework inverts that: the token owns all state and
+the transfer pipeline; hooks are a separate deployment the token calls
+externally and which can only **deny** — no path to mutate balances or
+ownership, no path to call the token at all. Calls flow one direction only,
+always: Token → Wrapper → Logic. Nothing downstream ever calls back.
 
-The common way projects add third-party extensibility to a token — Diamond
-facets, Safe-style modules — wires the extension in via `delegatecall`, so the
-extension runs inside the *host's own* storage context. That's a large share of
-why module-related exploits happen: a buggy or malicious module doesn't just get
-to say yes/no, it gets to touch everything. This framework makes non-authority a
-property of the calling convention itself — plain external `CALL`, never
-`DELEGATECALL` — rather than something enforced by review discipline.
+Diamond facets and Safe-style modules, the common way projects add third-party
+extensibility, wire the extension in via `delegatecall`, so it runs inside the
+*host's own* storage — a large share of why module exploits happen: a buggy
+module doesn't just get to say yes/no, it gets to touch everything. This
+framework makes non-authority a property of the calling convention itself —
+plain external `CALL`, never `DELEGATECALL` — rather than something enforced
+by review discipline.
 
 Prior art worth comparing against: **ERC-1404** puts restriction logic inside the
 token contract, so there's no separate deployment and nothing stopping the token
@@ -84,28 +83,24 @@ Token (IntegrityERC20 / IntegrityERC721 / IntegrityERC1155)
       Wrapper → Logic chain can't brick the token
 ```
 
-Deploying `MyLogic` is the one transaction a developer runs; three chained
-`new` calls — Logic → Wrapper → Token — bring the whole governed token into
-existence with no separate initialization step and no window where any piece
-exists but isn't wired.
+Deploying `MyLogic` is the one transaction a developer runs — three chained
+`new` calls bring Logic, Wrapper, and Token into existence together, with no
+separate initialization step and no window where any piece exists unwired.
 
 **Nothing ever calls back.** `token.hooksContract()` always returns a real,
 non-zero wrapper address — the token only exists because that address called
-`new` on it — and the wrapper and logic contracts have no entry point through
-which they could write token state even if they wanted to. There is no
-hook-initiated mint, nothing. Mint and burn are exclusively
-`onlyIssuerAdmin`-gated on the token, unconditionally.
+`new` on it — and neither the wrapper nor logic has any entry point to write
+token state. Mint and burn are exclusively `onlyIssuerAdmin`-gated on the
+token, unconditionally.
 
 ## Core concepts
 
 - **Locked pipeline.** `transferFrom`, `mint`, `burn`, etc. are not `virtual` on
   the concrete token contracts. There is no inheritance path for a hooks author
   (or the issuer) to change what "transfer" means.
-- **Deny-only, and one-directional, with no exceptions.** `validate*` and
-  `before*` hooks can refuse an action; nothing on the hooks side has any path
-  to write token storage, ever. Earlier drafts of this framework carried a
-  narrow hook-initiated mint capability; it's gone. Mint and burn are
-  exclusively issuer-admin-gated, full stop.
+- **Deny-only, one-directional, no exceptions.** `validate*` and `before*`
+  hooks can refuse an action; nothing on the hooks side can ever write token
+  storage. Mint and burn are exclusively issuer-admin-gated, full stop.
 - **Strict superset of the base standard.** A conforming token stays a fully
   conforming ERC-20/721/1155: zero-value transfers succeed, batch operations
   emit exactly one `TransferBatch`, and no hook can make the token deviate from
@@ -135,10 +130,10 @@ developer never touches directly — see "Verifying a deployment."
 ## Verifying a deployment
 
 Solidity exposes a contract's runtime bytecode at compile time as
-`type(C).runtimeCode` — but **only for contracts with no immutable variables**.
-A contract with immutables has no single runtime bytecode, because the values are
-patched into the code at construction. The compiler rejects the expression
-outright:
+`type(C).runtimeCode` — but **only for contracts with no immutable
+variables**, since immutable values get patched into the code at
+construction, leaving no single runtime bytecode to expose. The compiler
+rejects the expression outright:
 
 ```
 Error (9274): "runtimeCode" is not available for contracts containing
@@ -179,13 +174,12 @@ contract MyMarketplace {
 
 Two properties worth calling out:
 
-**The check never calls into the target.** `EXTCODEHASH` is read directly by the
-EVM from the target's deployed bytecode, so a malicious contract can't misreport
-it the way it could if you called an `isCanonical()`-style function defined *on*
-the contract you're verifying — that contract could simply hardcode it to return
-true. This is also why the property can never be expressed as an interface the
-target implements: an interface is a thing you call, and the whole point is not
-to take the target's word for anything.
+**The check never calls into the target.** `EXTCODEHASH` is read directly by
+the EVM from deployed bytecode, so a malicious contract can't misreport it the
+way it could if you called an `isCanonical()` function defined *on* the
+contract being checked — it could just hardcode `true`. This is also why the
+property can't be expressed as an interface: an interface is something you
+call, and the whole point is not taking the target's word for anything.
 
 **The constraint enforces itself.** If anyone ever adds an `immutable` to a
 token or wrapper contract, `IntegrityVerifier.sol` stops compiling. The
@@ -239,9 +233,9 @@ it carries per-developer state and immutables by design, so there was never
 going to be one hash for "a logic contract" the way there is for the token and
 the wrapper. A canonical token behind a canonical wrapper can still have every
 transfer denied by hostile logic. Verifying a *specific* logic implementation
-with `isCanonical` is still meaningful; it just answers a narrower question
-("does this address run exactly the code its author published for this logic
-contract") than the ecosystem-wide one the token/wrapper hashes give you.
+with `isCanonical` still answers something — just a narrower question ("does
+this address run the code its author published") than the ecosystem-wide one
+the token/wrapper hashes answer.
 
 Verification also still bottoms out in reading source. What's eliminated is every
 *additional* anchor: no registry, no factory, no admin key, no published hash
@@ -295,7 +289,7 @@ Requires [Foundry](https://book.getfoundry.sh/getting-started/installation).
 ```sh
 git submodule update --init --recursive   # OpenZeppelin Contracts + forge-std
 forge build                               # uses the pinned profile in foundry.toml
-forge test                                # 70 tests
+forge test                                # 67 tests
 forge fmt --check                         # verify formatting matches CI
 ```
 

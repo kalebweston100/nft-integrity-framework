@@ -6,16 +6,15 @@ import "./HooksWrapperERC721.sol";
 
 /**
  * @title HooksLogicERC721
- * @notice Abstract base a developer inherits to write custom ERC-721 hook policy.
- *         Its constructor deploys a HooksWrapperERC721, which in turn deploys the
- *         IntegrityERC721 token — so deploying your logic contract is the single
- *         transaction that brings the whole chain (Logic → Wrapper → Token) into
- *         existence.
+ * @notice Abstract base a developer inherits to write custom ERC-721 hook
+ *         policy. Its constructor deploys a HooksWrapperERC721, which deploys
+ *         the IntegrityERC721 token — deploying your logic contract is the one
+ *         transaction that brings Logic → Wrapper → Token into existence.
  *
- * CALL DIRECTION: the wrapper calls this contract (gated `onlyWrapper`); this
- * contract never calls back into the wrapper or the token. There is no
- * hook-initiated write path anywhere in this framework — mint/burn are
- * exclusively issuer-admin-gated on the token. See IntegrityERC721.sol.
+ * The wrapper calls this contract (gated `onlyWrapper`); it never calls back
+ * into the wrapper or the token. Mint/burn are exclusively issuer-admin-gated
+ * on the token — no hook-initiated write path exists anywhere in this
+ * framework. See IntegrityERC721.sol.
  *
  * EXTENSION:
  *   Every hook has an internal `virtual` counterpart. Override the `_on*`
@@ -41,10 +40,9 @@ import "./HooksWrapperERC721.sol";
  *   BURN:     ownership check → beforeBurn → ownership → afterBurn
  */
 abstract contract HooksLogicERC721 is HooksAdmin {
-    /// @notice The wrapper this logic contract deployed. Immutable is fine here —
-    ///         unlike the wrapper and the token, this contract carries real,
-    ///         per-developer custom logic and was never going to have one
-    ///         universal codehash across the ecosystem.
+    /// @notice The wrapper this logic contract deployed. Immutable is fine here
+    ///         — this contract carries real, per-developer custom logic, so it
+    ///         was never going to have one universal codehash anyway.
     HooksWrapperERC721 public immutable wrapper;
 
     modifier onlyWrapper() {

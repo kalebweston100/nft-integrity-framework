@@ -13,30 +13,31 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
 /**
  * @title IntegrityERC1155
- * @notice The user-facing ERC-1155 token contract. Users call safeTransferFrom(),
- *         safeBatchTransferFrom(), etc. directly on this contract. Contains ALL
- *         token storage and the full locked transfer pipeline, and delegates
- *         policy decisions to an external wrapper contract.
- *
- * INHERITS:
- *   IntegrityTokenBase — reentrancy guard, IIntegrityToken partial implementation
- *   TokenAdmin (via Base) — issuer admin, pause/unpause
+ * @notice The user-facing ERC-1155 token contract. Users call
+ *         safeTransferFrom(), safeBatchTransferFrom(), etc. directly on this
+ *         contract, which holds all state and the full locked transfer
+ *         pipeline, and delegates policy decisions to an external wrapper
+ *         contract. Inherits IntegrityTokenBase (reentrancy guard,
+ *         IIntegrityToken) and, via it, TokenAdmin (issuer admin,
+ *         pause/unpause).
  *
  * SECURITY:
  *   - Deployed exclusively by its own wrapper, via `new`, from inside that
  *     wrapper's constructor
- *   - safeTransferFrom(), safeBatchTransferFrom(), setApprovalForAll() are non-virtual
- *   - Transfer pipeline is non-overridable (this contract is not abstract)
- *   - The wrapper is called via external CALL — it cannot access token storage.
- *     There is no path in the other direction: nothing on the hooks side can
- *     ever call back into this contract. Mint and burn are exclusively
- *     issuer-admin-gated, unconditionally.
- *   - Wrapper address is read from msg.sender at construction time and stored in a
- *     plain, setter-less slot — never immutable, so this contract's own runtime
- *     bytecode stays byte-identical across every deployment. See IntegrityVerifier.sol.
- *   - Strict ERC-1155 superset: zero-amount transfers succeed and batch operations
- *     emit exactly one TransferBatch (never also per-item TransferSingle), as the
- *     standard requires.
+ *   - safeTransferFrom/safeBatchTransferFrom/setApprovalForAll are
+ *     non-virtual; the pipeline is non-overridable (this contract is not
+ *     abstract)
+ *   - The wrapper is called via external CALL and cannot access token
+ *     storage; nothing on the hooks side can ever call back into this
+ *     contract. Mint and burn are exclusively issuer-admin-gated,
+ *     unconditionally.
+ *   - Wrapper address is read from msg.sender at construction and stored in a
+ *     plain, setter-less slot — never immutable, so this contract's runtime
+ *     bytecode stays byte-identical across every deployment. See
+ *     IntegrityVerifier.sol.
+ *   - Strict ERC-1155 superset: zero-amount transfers succeed and batch
+ *     operations emit exactly one TransferBatch (never also per-item
+ *     TransferSingle), as required.
  */
 contract IntegrityERC1155 is IERC1155, IERC1155MetadataURI, IERC2981, IntegrityTokenBase {
     // =========================================================================

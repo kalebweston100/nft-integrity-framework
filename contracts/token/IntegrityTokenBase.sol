@@ -9,32 +9,20 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title IntegrityTokenBase
- * @notice Abstract base for all framework token contracts. Provides the shared
- *         infrastructure that is identical across ERC-20, ERC-721, and ERC-1155:
+ * @notice Abstract base shared by all three token standards: reentrancy
+ *         guard, the IIntegrityToken partial implementation
+ *         (isIntegrityToken), and collection-level metadata URI. Inherits
+ *         TokenAdmin (issuer admin, pause/unpause). `tokenStandard()` is left
+ *         abstract for each concrete token to declare.
  *
- *   - Reentrancy guard
- *   - IIntegrityToken partial implementation (isIntegrityToken)
- *   - issuedAt timestamp
- *   - Collection-level metadata URI
- *
- * INHERITS:
- *   TokenAdmin — issuer admin, pause/unpause
- *
- * SECURITY:
- *   - Reentrancy guard protects the transfer/mint pipeline
- *   - All state variables are private with internal accessors where needed
- *   - tokenStandard() is left abstract — each concrete token must declare its standard
- *
- * NOTE ON THE HOOKS ADDRESS: each concrete token (IntegrityERC20/721/1155) stores its
- * own governing hooks-contract address as a plain (non-immutable, non-constant)
- * storage slot, set exactly once in its own constructor from `msg.sender` — the token
- * only ever comes into existence via `new` from inside a hooks contract's own
- * constructor, so `msg.sender` there is always that hooks contract, never spoofable.
- * There is deliberately no setter anywhere in the token's source. Keeping this out of
- * `immutable` matters: EXTCODEHASH never includes storage, only code, so a plain
- * storage slot (unlike an immutable, which gets baked into runtime bytecode as a
- * literal) keeps every canonical deployment of a given token contract byte-identical
- * regardless of which hooks contract deployed it — see Codehash.sol.
+ * NOTE ON THE HOOKS ADDRESS: each concrete token stores its governing hooks
+ * contract as a plain (non-immutable) storage slot, set once in its own
+ * constructor from `msg.sender` — the token only ever comes into existence
+ * via `new` from inside that hooks contract's constructor, so this is
+ * unspoofable, with deliberately no setter. Keeping it out of `immutable`
+ * matters: EXTCODEHASH covers only code, not storage, so every canonical
+ * deployment stays byte-identical regardless of which hooks contract deployed
+ * it — see IntegrityVerifier.sol.
  */
 abstract contract IntegrityTokenBase is IIntegrityToken, TokenAdmin, ReentrancyGuard {
     // =========================================================================

@@ -5,18 +5,10 @@ import "../interfaces/Errors.sol";
 
 /**
  * @title TokenAdmin
- * @notice Administrative controls for framework tokens: issuer admin,
- *         pause/unpause, and admin transfer.
- *
- * SECURITY MODEL:
- *   - issuerAdmin is set at construction (deployer) and can be transferred.
- *   - Pause state is stored here with public pause()/unpause() gated by onlyIssuerAdmin.
- *   - _isPaused() is non-virtual — issuers cannot fake the pause state.
- *
- * INHERITANCE NOTE:
- *   This contract is fully standalone (no parent contract). All three token standard
- *   variants (ERC-20, ERC-721, ERC-1155) share this admin layer. Storage is merged
- *   at the IntegrityTokenBase level.
+ * @notice Administrative controls shared by all three token standards: issuer
+ *         admin, pause/unpause, admin transfer. Fully standalone (no parent);
+ *         storage is merged in at IntegrityTokenBase. `_isPaused()` is
+ *         non-virtual so issuers can't fake the pause state.
  */
 abstract contract TokenAdmin {
     // =========================================================================

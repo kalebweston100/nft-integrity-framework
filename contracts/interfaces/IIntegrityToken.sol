@@ -5,35 +5,25 @@ import "./Types.sol";
 
 /**
  * @title IIntegrityToken
- * @notice Base interface that ALL tokens in this framework expose, regardless
- *         of token standard (ERC-20, ERC-721, ERC-1155).
- *
- * This interface defines the shared surface: which hooks contract governs the
- * token's behavior (the same contract that deployed it — see IntegrityTokenBase),
- * and how to tell the standard-specific concrete contract apart from an impostor.
- * Standard-specific
- * transfer surfaces use the official OpenZeppelin interfaces:
- *   - IERC20   (openzeppelin/contracts/token/ERC20/IERC20.sol)
- *   - IERC721  (openzeppelin/contracts/token/ERC721/IERC721.sol)
- *   - IERC1155 (openzeppelin/contracts/token/ERC1155/IERC1155.sol)
- *
- * Each Integrity* token contract implements the official ERC standard directly
- * alongside this interface.
+ * @notice Base interface every token in this framework exposes (ERC-20, 721,
+ *         1155): which hooks contract governs it (see IntegrityTokenBase) and
+ *         how to tell the concrete contract apart from an impostor.
+ *         Standard-specific transfer surfaces use the official OpenZeppelin
+ *         interfaces (IERC20/IERC721/IERC1155) directly alongside this one.
  */
 interface IIntegrityToken {
-    /// @notice Returns whether this contract implements the IIntegrityToken interface.
+    /// @notice Whether this contract implements IIntegrityToken.
     function isIntegrityToken() external pure returns (bool);
 
-    /// @notice Returns which token standard (ERC-20, ERC-721, ERC-1155) this token implements.
-    /// @dev Allows external contracts, indexers, and UIs to determine the correct
-    ///      interaction interface without trial-and-error interface detection.
+    /// @notice Which token standard this token implements — lets external
+    ///         contracts, indexers, and UIs pick the right interaction
+    ///         interface without trial-and-error detection.
     function tokenStandard() external pure returns (TokenStandard);
 
-    /// @notice Returns the hooks contract that deployed and governs this token.
-    ///         Every token has exactly one — it's the contract that called `new`
-    ///         on this token in the first place, so it can never be address(0).
+    /// @notice The hooks contract that deployed and governs this token. Never
+    ///         address(0) — it's the contract that called `new` on this token.
     function hooksContract() external view returns (address);
 
-    /// @notice Returns the collection-level metadata URI (e.g., OpenSea contract metadata).
+    /// @notice Collection-level metadata URI (e.g. OpenSea contract metadata).
     function contractURI() external view returns (string memory);
 }

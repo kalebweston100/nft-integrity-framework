@@ -7,13 +7,12 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  * @title IHooksERC721
  * @notice The deny/notify calling convention governing an ERC-721 token's
  *         transfer/mint/burn pipeline. Implemented by HooksWrapperERC721
- *         (canonical, called by the token) and HooksLogicERC721 (author-inherited,
- *         called by the wrapper) — see IHooksERC20 for the full architecture and
- *         the normative rules a conforming host token must follow (CALL-only
- *         invocation, fail-closed validate, fail-open try/catch-wrapped after,
- *         locked entry points, setter-less wrapper reference, strict-superset
- *         conformance to the underlying token standard, and ERC-165 discovery
- *         together with the limits of what discovery proves). Calls flow in one
+ *         (canonical, called by the token) and HooksLogicERC721
+ *         (author-inherited, called by the wrapper) — see IHooksERC20 for the
+ *         full architecture and normative rules (CALL-only invocation,
+ *         fail-closed validate, fail-open try/catch-wrapped after, locked
+ *         entry points, setter-less wrapper reference, strict-superset
+ *         conformance, and ERC-165 discovery and its limits). Calls flow one
  *         direction only: Token → Wrapper → Logic, never back.
  *
  * Burn takes only `tokenId`, not `from` — ownership is resolved via `ownerOf`

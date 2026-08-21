@@ -7,36 +7,22 @@ import "../interfaces/IHooksERC721.sol";
 
 /**
  * @title HooksWrapperERC721
- * @notice The canonical, un-inherited contract that sits between an
- *         IntegrityERC721 token and a developer's custom HooksLogicERC721
- *         contract. Concrete, never subclassed — every deployment of this exact
- *         contract produces byte-identical runtime bytecode (see
- *         IntegrityVerifier.sol), the same way IntegrityERC721 itself does.
+ * @notice Canonical, un-inherited relay between an IntegrityERC721 token and a
+ *         developer's HooksLogicERC721 contract — every deployment produces
+ *         byte-identical bytecode (see IntegrityVerifier.sol).
  *
- * CALL DIRECTION IS STRICTLY ONE-WAY: Token → Wrapper → Logic. This contract's
- * entire job is to relay: the token calls it (gated `onlyToken`), and every call
- * is forwarded, unmodified, to `logic` via plain external CALL — never
- * DELEGATECALL. There is no path in the other direction: this contract never
- * calls anything on the token.
- *
- * ZERO IMMUTABLE STATE, DELIBERATELY: `token` and `logic` are plain storage,
- * each written exactly once in this constructor with no setter — see
- * HooksWrapperERC20's NatSpec for why that's what makes
- * `type(HooksWrapperERC721).runtimeCode` compile at all.
- *
- * DEPLOYMENT: a developer's custom logic contract (inheriting HooksLogicERC721)
- * deploys this wrapper in its own constructor; this wrapper's constructor then
- * deploys the IntegrityERC721 token. Three `new` calls, chained, one
- * transaction: Logic → Wrapper → Token.
+ * Calls flow one-way, Token → Wrapper → Logic, via plain CALL (never
+ * DELEGATECALL); this contract never calls the token. `token` and `logic` are
+ * plain storage, set once in the constructor with no setter — zero immutable
+ * state is what makes `type(HooksWrapperERC721).runtimeCode` compile at all
+ * (see HooksWrapperERC20).
  */
 contract HooksWrapperERC721 is IHooksERC721, ERC165 {
-    /// @notice The IntegrityERC721 this wrapper deployed. Plain storage, set once
-    ///         from inside this constructor, no setter.
+    /// @notice The IntegrityERC721 this wrapper deployed. Plain storage, no setter.
     IntegrityERC721 public token;
 
-    /// @notice The developer's custom logic contract. Captured from `msg.sender`
-    ///         at construction — unspoofable, exactly like the token's own hooks
-    ///         reference. Plain storage, no setter.
+    /// @notice The developer's logic contract, captured from msg.sender at
+    ///         construction (unspoofable). Plain storage, no setter.
     address public logic;
 
     modifier onlyToken() {

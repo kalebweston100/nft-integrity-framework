@@ -11,43 +11,30 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 /**
  * @title IntegrityERC20
  * @notice The user-facing ERC-20 token contract. Users call transfer(),
- *         approve(), etc. directly on this contract. Contains ALL token
- *         storage and the full locked transfer pipeline, and delegates policy
+ *         approve(), etc. directly on this contract, which holds all state
+ *         and the full locked transfer pipeline, and delegates policy
  *         decisions to an external wrapper contract.
  *
- * ARCHITECTURE:
- *   This contract IS the token. It holds all state (balances, allowances, admin
- *   state) and contains the full transfer pipeline. Developers customize behavior
- *   by inheriting HooksLogicERC20, whose constructor deploys a HooksWrapperERC20,
- *   which deploys THIS contract. The token calls its wrapper via external CALL —
- *   the wrapper (and the logic contract behind it) has its own storage and
- *   CANNOT access or modify token state.
- *
- * INHERITS:
- *   IntegrityTokenBase — reentrancy guard, IIntegrityToken partial implementation
- *   TokenAdmin (via Base) — issuer admin, pause/unpause
- *
- * DEPLOYMENT:
- *   1. Developer deploys their logic contract (inherits HooksLogicERC20)
- *   2. Its constructor deploys a HooksWrapperERC20
- *   3. The wrapper's constructor deploys THIS contract directly via
- *      `new IntegrityERC20(...)` and wires itself as governor — no factory, no
- *      separate registration step
- *   4. Users interact with THIS contract for all ERC-20 operations
+ * ARCHITECTURE: this contract IS the token — all balances, allowances, and
+ * admin state live here. Developers customize behavior by inheriting
+ * HooksLogicERC20, whose constructor deploys a HooksWrapperERC20, which
+ * deploys THIS contract via `new` and wires itself as governor — no factory,
+ * no separate registration step. Inherits IntegrityTokenBase (reentrancy
+ * guard, IIntegrityToken) and, via it, TokenAdmin (issuer admin,
+ * pause/unpause).
  *
  * SECURITY:
- *   - transfer(), transferFrom(), approve() are non-virtual (concrete contract)
- *   - Transfer pipeline is non-overridable (this contract is not abstract)
- *   - The wrapper is called via external CALL — it cannot access token storage.
- *     There is no path in the other direction: nothing on the hooks side can
- *     ever call back into this contract. Mint and burn are exclusively
- *     issuer-admin-gated, unconditionally — not something a hooks contract can
- *     trigger under any circumstance.
- *   - Wrapper address is read from msg.sender at construction time and stored in
- *     a plain, setter-less slot — never immutable, so this contract's own
- *     runtime bytecode stays byte-identical across every deployment. See
+ *   - transfer/transferFrom/approve are non-virtual; the pipeline is
+ *     non-overridable (this contract is not abstract)
+ *   - The wrapper is called via external CALL and cannot access token
+ *     storage; nothing on the hooks side can ever call back into this
+ *     contract. Mint and burn are exclusively issuer-admin-gated,
+ *     unconditionally.
+ *   - Wrapper address is read from msg.sender at construction and stored in a
+ *     plain, setter-less slot — never immutable, so this contract's runtime
+ *     bytecode stays byte-identical across every deployment. See
  *     IntegrityVerifier.sol.
- *   - Strict ERC-20 superset: zero-value transfers succeed, as the standard requires.
+ *   - Strict ERC-20 superset: zero-value transfers succeed, as required.
  */
 contract IntegrityERC20 is IERC20, IntegrityTokenBase {
     // =========================================================================

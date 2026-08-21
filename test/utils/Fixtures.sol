@@ -12,10 +12,9 @@ import "../../contracts/test/TestHooksERC20.sol";
 import "../../contracts/test/TestHooksERC721.sol";
 import "../../contracts/test/TestHooksERC1155.sol";
 
-/// @notice Shared deployment helpers reused across the test suite. Mirrors the
-///         exact chain described in the README: deploying a logic contract
-///         deploys a wrapper, which deploys the token — three `new` calls,
-///         chained, one transaction. No factory involved.
+/// @notice Shared deployment helpers reused across the test suite: deploying a
+///         logic contract deploys a wrapper, which deploys the token — three
+///         chained `new` calls, one transaction, no factory.
 abstract contract Fixtures is Test {
     function _deployERC20(address issuerAdmin)
         internal
