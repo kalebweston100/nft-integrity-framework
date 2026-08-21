@@ -5,19 +5,16 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
 /**
  * @title IHooksERC1155
- * @notice A "restrictive external hooks" contract governing an ERC-1155 token whose
- *         transfer/mint/burn pipeline is locked (non-virtual) and which routes
- *         policy decisions out to this contract by plain external CALL.
- *
- * See IHooksERC20 for the full set of normative rules a conforming host token must
- * follow (CALL-only invocation, fail-closed validate, fail-open try/catch-wrapped
- * after, locked entry points, setter-less hooks reference, strict-superset
- * conformance to the underlying token standard, and ERC-165 discovery together
- * with the limits of what discovery proves).
- *
- * This interface is DENY-ONLY. Hook-initiated minting (IHooks.sol) is a separate,
- * narrow capability outside this interface — see that file for why it isn't
- * declared via ERC-165.
+ * @notice The deny/notify calling convention governing an ERC-1155 token's
+ *         transfer/mint/burn pipeline. Implemented by HooksWrapperERC1155
+ *         (canonical, called by the token) and HooksLogicERC1155 (author-inherited,
+ *         called by the wrapper) — see IHooksERC20 for the full architecture and
+ *         the normative rules a conforming host token must follow (CALL-only
+ *         invocation, fail-closed validate, fail-open try/catch-wrapped after,
+ *         locked entry points, setter-less wrapper reference, strict-superset
+ *         conformance to the underlying token standard, and ERC-165 discovery
+ *         together with the limits of what discovery proves). Calls flow in one
+ *         direction only: Token → Wrapper → Logic, never back.
  *
  * No separate batch hooks: the token's batch mint/burn/transfer entry points
  * (mintBatch, burnBatch, safeBatchTransferFrom) each loop and fire these same

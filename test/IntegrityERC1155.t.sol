@@ -12,7 +12,7 @@ contract IntegrityERC1155Test is Fixtures {
     IntegrityERC1155 internal token;
 
     function setUp() public {
-        (hooks, token) = _deployERC1155(admin);
+        (hooks,, token) = _deployERC1155(admin);
     }
 
     // ─── Mint / burn ─────────────────────────────────────────────────────────
@@ -187,22 +187,6 @@ contract IntegrityERC1155Test is Fixtures {
         vm.expectRevert(bytes("no burning"));
         token.burn(alice, 1, 1);
         vm.stopPrank();
-    }
-
-    // ─── Hook-initiated mint ─────────────────────────────────────────────────
-
-    function test_hookMint_onlyCallableByHooksContract() public {
-        vm.prank(admin);
-        vm.expectRevert(NotHooksContract.selector);
-        token.hookMint(alice, 1, 5);
-    }
-
-    function test_hookMint_viaHooksContract() public {
-        vm.prank(admin);
-        hooks.issuerMint(alice, 9, 3);
-
-        assertEq(token.balanceOf(alice, 9), 3);
-        assertEq(token.totalSupply(9), 3);
     }
 
     // ─── Metadata / introspection ────────────────────────────────────────────

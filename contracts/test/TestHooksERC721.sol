@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.34;
 
-import "../hooks/HooksERC721.sol";
+import "../hooks/HooksLogicERC721.sol";
 
 /**
  * @title TestHooksERC721
- * @notice Concrete ERC-721 hooks for testing. Records every hook invocation and
- *         exposes admin toggles to drive every branch in the token's pipeline.
- *
- * Exercises IntegrityERC721.hookMint() via the base's _mintFromHooks — minting
- * authority isn't a separately declared capability; see IHooks.sol.
+ * @notice Concrete ERC-721 hooks logic for testing. Records every hook
+ *         invocation and exposes admin toggles to drive every branch in the
+ *         token's pipeline. Deployed as Logic → Wrapper → Token; this contract
+ *         never calls the wrapper or token — the wrapper calls it.
  *
  * Note that transfer denial goes through _onValidateTransfer, the authoritative
  * deny gate — not through a revert in _onBeforeTransfer, which IHooksERC20 rule 2
  * reserves for settle-only notification.
  */
-contract TestHooksERC721 is HooksERC721 {
+contract TestHooksERC721 is HooksLogicERC721 {
     // ─── Call Record Structs ─────────────────────────────────────────────────
 
     struct TransferRecord {
@@ -67,7 +66,7 @@ contract TestHooksERC721 is HooksERC721 {
         string memory tokenSymbol,
         string memory contractURI_,
         string memory baseURI_
-    ) HooksERC721(_issuerAdmin, tokenName, tokenSymbol, contractURI_, baseURI_) {}
+    ) HooksLogicERC721(_issuerAdmin, tokenName, tokenSymbol, contractURI_, baseURI_) {}
 
     // ─── Admin Controls ──────────────────────────────────────────────────────
 
@@ -94,16 +93,6 @@ contract TestHooksERC721 is HooksERC721 {
     ///         a broken hooks contract from bricking the token.
     function setRevertInAfterHooks(bool enabled) external onlyIssuerAdmin {
         revertInAfterHooks = enabled;
-    }
-
-    /// @notice Exercises IntegrityERC721.hookMint() — hook-initiated mint.
-    function issuerMint(address to, uint256 tokenId) external onlyIssuerAdmin {
-        _mintFromHooks(to, tokenId);
-    }
-
-    /// @notice Exercises IntegrityERC721.hookSetTokenURI().
-    function issuerSetTokenURI(uint256 tokenId, string calldata newURI) external onlyIssuerAdmin {
-        _setTokenURIFromHooks(tokenId, newURI);
     }
 
     // ─── Deny Gates ──────────────────────────────────────────────────────────

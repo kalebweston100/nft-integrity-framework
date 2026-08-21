@@ -4,8 +4,7 @@ pragma solidity ^0.8.34;
 import "../interfaces/Types.sol";
 import "../interfaces/Errors.sol";
 import "./IntegrityTokenBase.sol";
-import "../hooks/HooksERC1155.sol";
-import "../interfaces/IHooks.sol";
+import "../hooks/HooksWrapperERC1155.sol";
 import "../interfaces/IERC1155Receiver.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import "@openzeppelin/contracts/token/ERC1155/extensions/IERC1155MetadataURI.sol";
@@ -17,29 +16,29 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  * @notice The user-facing ERC-1155 token contract. Users call safeTransferFrom(),
  *         safeBatchTransferFrom(), etc. directly on this contract. Contains ALL
  *         token storage and the full locked transfer pipeline, and delegates
- *         policy decisions to an external developer-deployed hooks contract.
+ *         policy decisions to an external wrapper contract.
  *
  * INHERITS:
  *   IntegrityTokenBase — reentrancy guard, IIntegrityToken partial implementation
  *   TokenAdmin (via Base) — issuer admin, pause/unpause
  *
  * SECURITY:
- *   - Deployed exclusively by its own hooks contract, via `new`, from inside that
- *     hooks contract's constructor
+ *   - Deployed exclusively by its own wrapper, via `new`, from inside that
+ *     wrapper's constructor
  *   - safeTransferFrom(), safeBatchTransferFrom(), setApprovalForAll() are non-virtual
  *   - Transfer pipeline is non-overridable (this contract is not abstract)
- *   - Hooks run via external CALL — they cannot access token storage. The sole
- *     exception is hookMint/hookSetTokenURI, which grant the hooks contract real
- *     minting authority. There is no separate ERC-165 marker for this — see
- *     IHooks.sol for why one wouldn't be enforceable anyway.
- *   - Hooks address is read from msg.sender at construction time and stored in a
+ *   - The wrapper is called via external CALL — it cannot access token storage.
+ *     There is no path in the other direction: nothing on the hooks side can
+ *     ever call back into this contract. Mint and burn are exclusively
+ *     issuer-admin-gated, unconditionally.
+ *   - Wrapper address is read from msg.sender at construction time and stored in a
  *     plain, setter-less slot — never immutable, so this contract's own runtime
  *     bytecode stays byte-identical across every deployment. See IntegrityVerifier.sol.
  *   - Strict ERC-1155 superset: zero-amount transfers succeed and batch operations
  *     emit exactly one TransferBatch (never also per-item TransferSingle), as the
  *     standard requires.
  */
-contract IntegrityERC1155 is IERC1155, IERC1155MetadataURI, IERC2981, IHookMintERC1155, IntegrityTokenBase {
+contract IntegrityERC1155 is IERC1155, IERC1155MetadataURI, IERC2981, IntegrityTokenBase {
     // =========================================================================
     //                          EVENTS
     // =========================================================================
@@ -50,12 +49,12 @@ contract IntegrityERC1155 is IERC1155, IERC1155MetadataURI, IERC2981, IHookMintE
     event TokenURIUpdated(uint256 indexed id, string newTokenURI);
 
     // =========================================================================
-    //                     HOOKS CONTRACT (plain storage, setter-less)
+    //                     WRAPPER CONTRACT (plain storage, setter-less)
     // =========================================================================
 
-    /// @notice The hooks contract that deployed and governs this token. Never
+    /// @notice The wrapper that deployed and governs this token. Never
     ///         address(0). Deliberately not `immutable`: see contract NatSpec.
-    HooksERC1155 private _hooks;
+    HooksWrapperERC1155 private _hooks;
 
     // =========================================================================
     //                     TOKEN STORAGE
@@ -84,7 +83,7 @@ contract IntegrityERC1155 is IERC1155, IERC1155MetadataURI, IERC2981, IHookMintE
     constructor(address admin, string memory baseTokenURI, string memory initialContractURI)
         IntegrityTokenBase(admin, initialContractURI)
     {
-        _hooks = HooksERC1155(msg.sender);
+        _hooks = HooksWrapperERC1155(msg.sender);
         _uri = baseTokenURI;
     }
 
@@ -185,7 +184,9 @@ contract IntegrityERC1155 is IERC1155, IERC1155MetadataURI, IERC2981, IHookMintE
     //                     ISSUER ADMIN: MINT / BURN
     // =========================================================================
 
-    /// @notice Mint tokens of an id. Only callable by issuer admin.
+    /// @notice Mint tokens of an id. Only callable by issuer admin. This is the
+    ///         ONLY way supply can ever increase — there is no hook-initiated
+    ///         mint path.
     function mint(address to, uint256 id, uint256 amount, bytes calldata data)
         external
         onlyIssuerAdmin
@@ -349,31 +350,6 @@ contract IntegrityERC1155 is IERC1155, IERC1155MetadataURI, IERC2981, IHookMintE
     {
         receiver = _royaltyReceiver;
         royaltyAmount = (salePrice * _royaltyFeeNumerator) / 10000;
-    }
-
-    // =========================================================================
-    //                     HOOKS-INITIATED MINT / URI
-    // =========================================================================
-
-    /// @notice Mint tokens initiated by the hooks contract. Skips beforeMint/afterMint
-    ///         to avoid circular calls (the hooks contract IS the caller).
-    /// @dev Only callable by the hooks contract. This is real minting authority;
-    ///      see IHooks.sol.
-    function hookMint(address to, uint256 id, uint256 amount) external override whenNotPaused nonReentrant {
-        if (msg.sender != address(_hooks)) revert NotHooksContract();
-        if (to == address(0)) revert ZeroAddress();
-
-        _balances[id][to] += amount;
-        _totalSupply[id] += amount;
-        emit TransferSingle(msg.sender, address(0), to, id, amount);
-    }
-
-    /// @notice Set a per-token-ID URI initiated by the hooks contract.
-    /// @dev Only callable by the hooks contract.
-    function hookSetTokenURI(uint256 id, string calldata newURI) external override whenNotPaused {
-        if (msg.sender != address(_hooks)) revert NotHooksContract();
-        _tokenURIs[id] = newURI;
-        emit TokenURIUpdated(id, newURI);
     }
 
     // =========================================================================

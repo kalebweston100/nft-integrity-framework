@@ -4,8 +4,7 @@ pragma solidity ^0.8.34;
 import "../interfaces/Types.sol";
 import "../interfaces/Errors.sol";
 import "./IntegrityTokenBase.sol";
-import "../hooks/HooksERC721.sol";
-import "../interfaces/IHooks.sol";
+import "../hooks/HooksWrapperERC721.sol";
 import "../interfaces/IERC721Receiver.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/IERC721Metadata.sol";
@@ -17,29 +16,29 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  * @notice The user-facing ERC-721 token contract. Users call transferFrom(),
  *         safeTransferFrom(), etc. directly on this contract. Contains ALL token
  *         storage and the full locked transfer pipeline, and delegates policy
- *         decisions to an external developer-deployed hooks contract.
+ *         decisions to an external wrapper contract.
  *
  * INHERITS:
  *   IntegrityTokenBase — reentrancy guard, IIntegrityToken partial implementation
  *   TokenAdmin (via Base) — issuer admin, pause/unpause
  *
  * SECURITY:
- *   - Deployed exclusively by its own hooks contract, via `new`, from inside that
- *     hooks contract's constructor — there is no factory
+ *   - Deployed exclusively by its own wrapper, via `new`, from inside that
+ *     wrapper's constructor — there is no factory
  *   - transferFrom(), safeTransferFrom(), approve(), setApprovalForAll() are non-virtual
  *   - Transfer pipeline is non-overridable (this contract is not abstract)
- *   - Hooks run via external CALL — they cannot access token storage. The sole
- *     exception is hookMint/hookSetTokenURI, which grant the hooks contract real
- *     minting authority. There is no separate ERC-165 marker for this — see
- *     IHooks.sol for why one wouldn't be enforceable anyway.
- *   - Hooks address is read from msg.sender at construction time (the deploying
+ *   - The wrapper is called via external CALL — it cannot access token storage.
+ *     There is no path in the other direction: nothing on the hooks side can
+ *     ever call back into this contract. Mint and burn are exclusively
+ *     issuer-admin-gated, unconditionally.
+ *   - Wrapper address is read from msg.sender at construction time (the deploying
  *     contract) and stored in a plain, setter-less slot — never immutable, so this
  *     contract's own runtime bytecode stays byte-identical across every deployment
- *     regardless of which hooks contract created it. See IntegrityVerifier.sol.
+ *     regardless of which wrapper created it. See IntegrityVerifier.sol.
  *   - Standard ERC-721 transfer/approval surface is untouched, so marketplaces
  *     (e.g. OpenSea via Seaport) trade this token normally
  */
-contract IntegrityERC721 is IERC721, IERC721Metadata, IERC2981, IHookMintERC721, IntegrityTokenBase {
+contract IntegrityERC721 is IERC721, IERC721Metadata, IERC2981, IntegrityTokenBase {
     // =========================================================================
     //                          EVENTS
     // =========================================================================
@@ -50,13 +49,13 @@ contract IntegrityERC721 is IERC721, IERC721Metadata, IERC2981, IHookMintERC721,
     event TokenURIUpdated(uint256 indexed tokenId, string newTokenURI);
 
     // =========================================================================
-    //                     HOOKS CONTRACT (plain storage, setter-less)
+    //                     WRAPPER CONTRACT (plain storage, setter-less)
     // =========================================================================
 
-    /// @notice The hooks contract that deployed and governs this token. Never
-    ///         address(0) — this contract only ever exists because a hooks contract
+    /// @notice The wrapper that deployed and governs this token. Never
+    ///         address(0) — this contract only ever exists because a wrapper
     ///         called `new` on it. Deliberately not `immutable`: see contract NatSpec.
-    HooksERC721 private _hooks;
+    HooksWrapperERC721 private _hooks;
 
     // =========================================================================
     //                     TOKEN STORAGE
@@ -96,7 +95,7 @@ contract IntegrityERC721 is IERC721, IERC721Metadata, IERC2981, IHookMintERC721,
         string memory initialContractURI,
         string memory initialBaseURI
     ) IntegrityTokenBase(admin, initialContractURI) {
-        _hooks = HooksERC721(msg.sender);
+        _hooks = HooksWrapperERC721(msg.sender);
         _name = tokenName;
         _symbol = tokenSymbol;
         _baseURI = initialBaseURI;
@@ -188,7 +187,8 @@ contract IntegrityERC721 is IERC721, IERC721Metadata, IERC2981, IHookMintERC721,
     //                     ISSUER ADMIN: MINT / BURN
     // =========================================================================
 
-    /// @notice Mint an NFT. Only callable by issuer admin.
+    /// @notice Mint an NFT. Only callable by issuer admin. This is the ONLY way
+    ///         new tokens can ever be minted — there is no hook-initiated mint path.
     /// @param to Recipient address.
     /// @param tokenId The NFT token ID to mint.
     /// @param data Arbitrary data forwarded to hooks.
@@ -246,30 +246,6 @@ contract IntegrityERC721 is IERC721, IERC721Metadata, IERC2981, IHookMintERC721,
         _owners[tokenId] = to;
         _totalSupply += 1;
         emit Transfer(address(0), to, tokenId);
-    }
-
-    // =========================================================================
-    //                     HOOKS-INITIATED MINT / URI
-    // =========================================================================
-
-    /// @notice Mint an NFT initiated by the hooks contract. Skips beforeMint/afterMint
-    ///         callbacks to avoid circular calls (the hooks contract IS the caller, so
-    ///         its own logic already ran before invoking this).
-    /// @dev Only callable by the hooks contract. This is real minting authority;
-    ///      see IHooks.sol.
-    function hookMint(address to, uint256 tokenId) external override whenNotPaused nonReentrant {
-        if (msg.sender != address(_hooks)) revert NotHooksContract();
-        _mintChecks(to, tokenId);
-        _mintBalanceUpdate(to, tokenId);
-    }
-
-    /// @notice Set a per-token URI initiated by the hooks contract.
-    /// @dev Only callable by the hooks contract.
-    function hookSetTokenURI(uint256 tokenId, string calldata newURI) external override whenNotPaused {
-        if (msg.sender != address(_hooks)) revert NotHooksContract();
-        if (_owners[tokenId] == address(0)) revert NonexistentToken();
-        _tokenURIs[tokenId] = newURI;
-        emit TokenURIUpdated(tokenId, newURI);
     }
 
     // =========================================================================

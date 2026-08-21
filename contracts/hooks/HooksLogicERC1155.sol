@@ -1,31 +1,27 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.8.34;
 
-import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
-import "../token/IntegrityERC1155.sol";
-import "../interfaces/IHooksERC1155.sol";
-import "../interfaces/IHooks.sol";
 import "./HooksAdmin.sol";
+import "./HooksWrapperERC1155.sol";
 
 /**
- * @title HooksERC1155
- * @notice Abstract base for ERC-1155 hooks contracts. Provides the full hook
- *         framework, access control, and deploys its own token. Implements
- *         IHooksERC1155 — see that interface for the normative rules this
- *         contract's calling convention follows.
+ * @title HooksLogicERC1155
+ * @notice Abstract base a developer inherits to write custom ERC-1155 hook
+ *         policy. Its constructor deploys a HooksWrapperERC1155, which in turn
+ *         deploys the IntegrityERC1155 token — so deploying your logic contract
+ *         is the single transaction that brings the whole chain (Logic →
+ *         Wrapper → Token) into existence.
  *
- * DEPLOYMENT FLOW:
- *   Deploy MyHooks(issuerAdmin, baseTokenURI, contractURI) inheriting HooksERC1155
- *   — its constructor deploys the IntegrityERC1155 token directly
- *   (`new IntegrityERC1155(...)`) and wires itself as governor. There is no factory
- *   and no separate initialization step: `token` is set once, synchronously, as
- *   the return value of `new`.
+ * CALL DIRECTION: the wrapper calls this contract (gated `onlyWrapper`); this
+ * contract never calls back into the wrapper or the token. There is no
+ * hook-initiated write path anywhere in this framework — mint/burn and metadata
+ * writes are exclusively issuer-admin-gated on the token. See IntegrityERC1155.sol.
  *
  * EXTENSION:
- *   Every hook in the calling convention has an internal `virtual` counterpart.
- *   Override the `_on*` function, never the external one — the external functions
- *   carry `onlyToken` and are deliberately non-virtual so an override cannot
- *   remove that check.
+ *   Every hook has an internal `virtual` counterpart. Override the `_on*`
+ *   function, never the external one — the external functions carry
+ *   `onlyWrapper` and are deliberately non-virtual so an override cannot remove
+ *   that check.
  *
  *     Deny gates (fail-closed):
  *       _onValidateTransfer  → return (false, reason) to block a transfer
@@ -33,55 +29,40 @@ import "./HooksAdmin.sol";
  *       _onBeforeBurn        → return (false, reason) to block a burn
  *       _onBeforeSetURI / _onBeforeSetTokenURI
  *
- *     Notifications (fail-open, try/catch-wrapped by the token):
+ *     Notifications (fail-open, try/catch-wrapped by the token around the
+ *     entire Token → Wrapper → Logic call chain):
  *       _onBeforeTransfer, _onAfterTransfer, _onAfterMint, _onAfterBurn,
  *       _onAfterSetURI, _onAfterSetTokenURI
  *
  *   Use _onValidateTransfer — not a revert in _onBeforeTransfer — to deny a
  *   transfer. beforeTransfer is a settle-only notification per IHooksERC20 rule 2.
  *
- * MINTING AUTHORITY:
- *   _mintFromHooks(to, id, amount) calls IntegrityERC1155.hookMint, which is real
- *   minting authority over the token — a deliberate, narrow capability for use
- *   cases like mint-on-deposit. Nothing requires a subclass to call it; document
- *   prominently if yours does. See IHooks.sol for why this isn't split into a
- *   separately declared ERC-165 capability.
- *
  * HOOK EXECUTION ORDER:
  *   TRANSFER: pause → beforeTransfer → validateTransfer → balance → afterTransfer
  *   MINT:     beforeMint → balance → afterMint
  *   BURN:     balance check → beforeBurn → balance → afterBurn
  */
-abstract contract HooksERC1155 is IHooksERC1155, ERC165, HooksAdmin {
-    /// @notice The IntegrityERC1155 this hooks contract deployed and governs.
-    IntegrityERC1155 public immutable token;
+abstract contract HooksLogicERC1155 is HooksAdmin {
+    /// @notice The wrapper this logic contract deployed. Immutable is fine here —
+    ///         unlike the wrapper and the token, this contract carries real,
+    ///         per-developer custom logic and was never going to have one
+    ///         universal codehash across the ecosystem.
+    HooksWrapperERC1155 public immutable wrapper;
 
-    modifier onlyToken() {
-        require(msg.sender == address(token), "Hooks: Not token contract");
+    modifier onlyWrapper() {
+        require(msg.sender == address(wrapper), "Hooks: Not wrapper contract");
         _;
     }
 
     constructor(address _issuerAdmin, string memory baseTokenURI, string memory contractURI_) HooksAdmin(_issuerAdmin) {
-        token = new IntegrityERC1155(_issuerAdmin, baseTokenURI, contractURI_);
-    }
-
-    function _mintFromHooks(address to, uint256 id, uint256 amount) internal {
-        token.hookMint(to, id, amount);
-    }
-
-    function _setTokenURIFromHooks(uint256 id, string memory newURI) internal {
-        token.hookSetTokenURI(id, newURI);
-    }
-
-    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
-        return interfaceId == type(IHooksERC1155).interfaceId || super.supportsInterface(interfaceId);
+        wrapper = new HooksWrapperERC1155(_issuerAdmin, baseTokenURI, contractURI_);
     }
 
     // =========================================================================
-    //                          TRANSFER HOOKS
+    //                          TRANSFER
     // =========================================================================
 
-    function beforeTransfer(address from, address to, uint256 id, uint256 amount) external override onlyToken {
+    function beforeTransfer(address from, address to, uint256 id, uint256 amount) external onlyWrapper {
         _onBeforeTransfer(from, to, id, amount);
     }
 
@@ -92,8 +73,7 @@ abstract contract HooksERC1155 is IHooksERC1155, ERC165, HooksAdmin {
     function validateTransfer(address from, address to, uint256 id, uint256 amount)
         external
         view
-        override
-        onlyToken
+        onlyWrapper
         returns (bool valid, string memory reason)
     {
         return _onValidateTransfer(from, to, id, amount);
@@ -109,20 +89,19 @@ abstract contract HooksERC1155 is IHooksERC1155, ERC165, HooksAdmin {
         return (true, "");
     }
 
-    function afterTransfer(address from, address to, uint256 id, uint256 amount) external override onlyToken {
+    function afterTransfer(address from, address to, uint256 id, uint256 amount) external onlyWrapper {
         _onAfterTransfer(from, to, id, amount);
     }
 
     function _onAfterTransfer(address from, address to, uint256 id, uint256 amount) internal virtual {}
 
     // =========================================================================
-    //                            MINT HOOKS
+    //                            MINT
     // =========================================================================
 
     function beforeMint(address to, uint256 id, uint256 amount, bytes calldata data)
         external
-        override
-        onlyToken
+        onlyWrapper
         returns (bool allowed, string memory reason)
     {
         return _onBeforeMint(to, id, amount, data);
@@ -136,20 +115,19 @@ abstract contract HooksERC1155 is IHooksERC1155, ERC165, HooksAdmin {
         return (true, "");
     }
 
-    function afterMint(address to, uint256 id, uint256 amount, bytes calldata data) external override onlyToken {
+    function afterMint(address to, uint256 id, uint256 amount, bytes calldata data) external onlyWrapper {
         _onAfterMint(to, id, amount, data);
     }
 
     function _onAfterMint(address to, uint256 id, uint256 amount, bytes calldata data) internal virtual {}
 
     // =========================================================================
-    //                            BURN HOOKS
+    //                            BURN
     // =========================================================================
 
     function beforeBurn(address from, uint256 id, uint256 amount)
         external
-        override
-        onlyToken
+        onlyWrapper
         returns (bool allowed, string memory reason)
     {
         return _onBeforeBurn(from, id, amount);
@@ -159,17 +137,22 @@ abstract contract HooksERC1155 is IHooksERC1155, ERC165, HooksAdmin {
         return (true, "");
     }
 
-    function afterBurn(address from, uint256 id, uint256 amount) external override onlyToken {
+    function afterBurn(address from, uint256 id, uint256 amount) external onlyWrapper {
         _onAfterBurn(from, id, amount);
     }
 
     function _onAfterBurn(address from, uint256 id, uint256 amount) internal virtual {}
 
     // =========================================================================
-    //                          METADATA HOOKS
+    //                          METADATA
     // =========================================================================
 
-    function beforeSetURI(string calldata newUri) external view onlyToken returns (bool allowed, string memory reason) {
+    function beforeSetURI(string calldata newUri)
+        external
+        view
+        onlyWrapper
+        returns (bool allowed, string memory reason)
+    {
         return _onBeforeSetURI(newUri);
     }
 
@@ -177,7 +160,7 @@ abstract contract HooksERC1155 is IHooksERC1155, ERC165, HooksAdmin {
         return (true, "");
     }
 
-    function afterSetURI(string calldata newUri) external onlyToken {
+    function afterSetURI(string calldata newUri) external onlyWrapper {
         _onAfterSetURI(newUri);
     }
 
@@ -186,7 +169,7 @@ abstract contract HooksERC1155 is IHooksERC1155, ERC165, HooksAdmin {
     function beforeSetTokenURI(uint256 id, string calldata newURI)
         external
         view
-        onlyToken
+        onlyWrapper
         returns (bool allowed, string memory reason)
     {
         return _onBeforeSetTokenURI(id, newURI);
@@ -201,7 +184,7 @@ abstract contract HooksERC1155 is IHooksERC1155, ERC165, HooksAdmin {
         return (true, "");
     }
 
-    function afterSetTokenURI(uint256 id, string calldata newURI) external onlyToken {
+    function afterSetTokenURI(uint256 id, string calldata newURI) external onlyWrapper {
         _onAfterSetTokenURI(id, newURI);
     }
 

@@ -1,31 +1,27 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.8.34;
 
-import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
-import "../token/IntegrityERC721.sol";
-import "../interfaces/IHooksERC721.sol";
-import "../interfaces/IHooks.sol";
 import "./HooksAdmin.sol";
+import "./HooksWrapperERC721.sol";
 
 /**
- * @title HooksERC721
- * @notice Abstract base for ERC-721 hooks contracts. Provides the full hook
- *         framework, access control, and deploys its own token. Implements
- *         IHooksERC721 — see that interface for the normative rules this
- *         contract's calling convention follows.
+ * @title HooksLogicERC721
+ * @notice Abstract base a developer inherits to write custom ERC-721 hook policy.
+ *         Its constructor deploys a HooksWrapperERC721, which in turn deploys the
+ *         IntegrityERC721 token — so deploying your logic contract is the single
+ *         transaction that brings the whole chain (Logic → Wrapper → Token) into
+ *         existence.
  *
- * DEPLOYMENT FLOW:
- *   Deploy MyHooks(issuerAdmin, name, symbol, contractURI, baseURI) inheriting
- *   HooksERC721 — its constructor deploys the IntegrityERC721 token directly
- *   (`new IntegrityERC721(...)`) and wires itself as governor. There is no
- *   factory and no separate initialization step: `token` is set once,
- *   synchronously, as the return value of `new`.
+ * CALL DIRECTION: the wrapper calls this contract (gated `onlyWrapper`); this
+ * contract never calls back into the wrapper or the token. There is no
+ * hook-initiated write path anywhere in this framework — mint/burn and metadata
+ * writes are exclusively issuer-admin-gated on the token. See IntegrityERC721.sol.
  *
  * EXTENSION:
- *   Every hook in the calling convention has an internal `virtual` counterpart.
- *   Override the `_on*` function, never the external one — the external functions
- *   carry `onlyToken` and are deliberately non-virtual so an override cannot
- *   remove that check.
+ *   Every hook has an internal `virtual` counterpart. Override the `_on*`
+ *   function, never the external one — the external functions carry
+ *   `onlyWrapper` and are deliberately non-virtual so an override cannot remove
+ *   that check.
  *
  *     Deny gates (fail-closed):
  *       _onValidateTransfer  → return (false, reason) to block a transfer
@@ -33,35 +29,28 @@ import "./HooksAdmin.sol";
  *       _onBeforeBurn        → return (false, reason) to block a burn
  *       _onBeforeSetBaseURI / _onBeforeSetTokenURI
  *
- *     Notifications (fail-open, try/catch-wrapped by the token):
+ *     Notifications (fail-open, try/catch-wrapped by the token around the
+ *     entire Token → Wrapper → Logic call chain):
  *       _onBeforeTransfer, _onAfterTransfer, _onAfterMint, _onAfterBurn,
  *       _onAfterSetBaseURI, _onAfterSetTokenURI
  *
  *   Use _onValidateTransfer — not a revert in _onBeforeTransfer — to deny a
  *   transfer. beforeTransfer is a settle-only notification per IHooksERC20 rule 2.
  *
- * MINTING AUTHORITY:
- *   _mintFromHooks(to, tokenId) calls IntegrityERC721.hookMint, which is real
- *   minting authority over the token — a deliberate, narrow capability for use
- *   cases like mint-on-deposit. Nothing requires a subclass to call it; document
- *   prominently if yours does. See IHooks.sol for why this isn't split into a
- *   separately declared ERC-165 capability.
- *
  * HOOK EXECUTION ORDER:
  *   TRANSFER: pause → beforeTransfer → validateTransfer → ownership → afterTransfer
  *   MINT:     beforeMint → ownership → afterMint
  *   BURN:     ownership check → beforeBurn → ownership → afterBurn
  */
-abstract contract HooksERC721 is IHooksERC721, ERC165, HooksAdmin {
-    /// @notice The IntegrityERC721 this hooks contract deployed and governs. Immutable
-    ///         and set once, in the constructor, as the direct result of `new` — cheap
-    ///         to read here since (unlike the token's own hooks-address storage) hooks
-    ///         contracts are expected to carry per-developer state and were never going
-    ///         to have one universal codehash across the ecosystem anyway.
-    IntegrityERC721 public immutable token;
+abstract contract HooksLogicERC721 is HooksAdmin {
+    /// @notice The wrapper this logic contract deployed. Immutable is fine here —
+    ///         unlike the wrapper and the token, this contract carries real,
+    ///         per-developer custom logic and was never going to have one
+    ///         universal codehash across the ecosystem.
+    HooksWrapperERC721 public immutable wrapper;
 
-    modifier onlyToken() {
-        require(msg.sender == address(token), "Hooks: Not token contract");
+    modifier onlyWrapper() {
+        require(msg.sender == address(wrapper), "Hooks: Not wrapper contract");
         _;
     }
 
@@ -72,30 +61,14 @@ abstract contract HooksERC721 is IHooksERC721, ERC165, HooksAdmin {
         string memory contractURI_,
         string memory baseURI_
     ) HooksAdmin(_issuerAdmin) {
-        token = new IntegrityERC721(_issuerAdmin, tokenName, tokenSymbol, contractURI_, baseURI_);
-    }
-
-    function _tokenOwnerOf(uint256 tokenId) internal view returns (address) {
-        return token.ownerOf(tokenId);
-    }
-
-    function _mintFromHooks(address to, uint256 tokenId) internal {
-        token.hookMint(to, tokenId);
-    }
-
-    function _setTokenURIFromHooks(uint256 tokenId, string memory newURI) internal {
-        token.hookSetTokenURI(tokenId, newURI);
-    }
-
-    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
-        return interfaceId == type(IHooksERC721).interfaceId || super.supportsInterface(interfaceId);
+        wrapper = new HooksWrapperERC721(_issuerAdmin, tokenName, tokenSymbol, contractURI_, baseURI_);
     }
 
     // =========================================================================
-    //                          TRANSFER HOOKS
+    //                          TRANSFER
     // =========================================================================
 
-    function beforeTransfer(address from, address to, uint256 tokenId) external override onlyToken {
+    function beforeTransfer(address from, address to, uint256 tokenId) external onlyWrapper {
         _onBeforeTransfer(from, to, tokenId);
     }
 
@@ -106,8 +79,7 @@ abstract contract HooksERC721 is IHooksERC721, ERC165, HooksAdmin {
     function validateTransfer(address from, address to, uint256 tokenId)
         external
         view
-        override
-        onlyToken
+        onlyWrapper
         returns (bool valid, string memory reason)
     {
         return _onValidateTransfer(from, to, tokenId);
@@ -123,20 +95,19 @@ abstract contract HooksERC721 is IHooksERC721, ERC165, HooksAdmin {
         return (true, "");
     }
 
-    function afterTransfer(address from, address to, uint256 tokenId) external override onlyToken {
+    function afterTransfer(address from, address to, uint256 tokenId) external onlyWrapper {
         _onAfterTransfer(from, to, tokenId);
     }
 
     function _onAfterTransfer(address from, address to, uint256 tokenId) internal virtual {}
 
     // =========================================================================
-    //                            MINT HOOKS
+    //                            MINT
     // =========================================================================
 
     function beforeMint(address to, uint256 tokenId, bytes calldata data)
         external
-        override
-        onlyToken
+        onlyWrapper
         returns (bool allowed, string memory reason)
     {
         return _onBeforeMint(to, tokenId, data);
@@ -150,17 +121,17 @@ abstract contract HooksERC721 is IHooksERC721, ERC165, HooksAdmin {
         return (true, "");
     }
 
-    function afterMint(address to, uint256 tokenId, bytes calldata data) external override onlyToken {
+    function afterMint(address to, uint256 tokenId, bytes calldata data) external onlyWrapper {
         _onAfterMint(to, tokenId, data);
     }
 
     function _onAfterMint(address to, uint256 tokenId, bytes calldata data) internal virtual {}
 
     // =========================================================================
-    //                            BURN HOOKS
+    //                            BURN
     // =========================================================================
 
-    function beforeBurn(uint256 tokenId) external override onlyToken returns (bool allowed, string memory reason) {
+    function beforeBurn(uint256 tokenId) external onlyWrapper returns (bool allowed, string memory reason) {
         return _onBeforeBurn(tokenId);
     }
 
@@ -168,20 +139,20 @@ abstract contract HooksERC721 is IHooksERC721, ERC165, HooksAdmin {
         return (true, "");
     }
 
-    function afterBurn(uint256 tokenId) external override onlyToken {
+    function afterBurn(uint256 tokenId) external onlyWrapper {
         _onAfterBurn(tokenId);
     }
 
     function _onAfterBurn(uint256 tokenId) internal virtual {}
 
     // =========================================================================
-    //                          METADATA HOOKS
+    //                          METADATA
     // =========================================================================
 
     function beforeSetBaseURI(string calldata newBaseURI)
         external
         view
-        onlyToken
+        onlyWrapper
         returns (bool allowed, string memory reason)
     {
         return _onBeforeSetBaseURI(newBaseURI);
@@ -191,7 +162,7 @@ abstract contract HooksERC721 is IHooksERC721, ERC165, HooksAdmin {
         return (true, "");
     }
 
-    function afterSetBaseURI(string calldata newBaseURI) external onlyToken {
+    function afterSetBaseURI(string calldata newBaseURI) external onlyWrapper {
         _onAfterSetBaseURI(newBaseURI);
     }
 
@@ -200,7 +171,7 @@ abstract contract HooksERC721 is IHooksERC721, ERC165, HooksAdmin {
     function beforeSetTokenURI(uint256 tokenId, string calldata newURI)
         external
         view
-        onlyToken
+        onlyWrapper
         returns (bool allowed, string memory reason)
     {
         return _onBeforeSetTokenURI(tokenId, newURI);
@@ -215,7 +186,7 @@ abstract contract HooksERC721 is IHooksERC721, ERC165, HooksAdmin {
         return (true, "");
     }
 
-    function afterSetTokenURI(uint256 tokenId, string calldata newURI) external onlyToken {
+    function afterSetTokenURI(uint256 tokenId, string calldata newURI) external onlyWrapper {
         _onAfterSetTokenURI(tokenId, newURI);
     }
 

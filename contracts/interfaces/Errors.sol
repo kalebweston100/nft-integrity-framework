@@ -24,9 +24,6 @@ error NonexistentToken();
 error NotERC721Receiver();
 error NotERC1155Receiver();
 
-// ─── Hooks ───────────────────────────────────────────────────────────────────
-error NotHooksContract();
-
 // ─── Royalty ─────────────────────────────────────────────────────────────────
 error RoyaltyTooHigh();
 

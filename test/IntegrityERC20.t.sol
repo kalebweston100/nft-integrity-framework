@@ -12,7 +12,7 @@ contract IntegrityERC20Test is Fixtures {
     IntegrityERC20 internal token;
 
     function setUp() public {
-        (hooks, token) = _deployERC20(admin);
+        (hooks,, token) = _deployERC20(admin);
     }
 
     // ─── Mint / burn ─────────────────────────────────────────────────────────
@@ -199,22 +199,6 @@ contract IntegrityERC20Test is Fixtures {
 
         assertEq(token.balanceOf(bob), 10e18, "transfer must still settle");
         assertEq(hooks.afterTransferCount(), 0, "after-hook did revert");
-    }
-
-    // ─── Hook-initiated mint ─────────────────────────────────────────────────
-
-    function test_hookMint_onlyCallableByHooksContract() public {
-        vm.prank(admin);
-        vm.expectRevert(NotHooksContract.selector);
-        token.hookMint(alice, 1e18);
-    }
-
-    function test_hookMint_viaHooksContract() public {
-        vm.prank(admin);
-        hooks.issuerMint(alice, 5e18);
-
-        assertEq(token.balanceOf(alice), 5e18);
-        assertEq(token.totalSupply(), 5e18);
     }
 
     // ─── Admin ───────────────────────────────────────────────────────────────

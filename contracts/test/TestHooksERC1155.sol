@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.34;
 
-import "../hooks/HooksERC1155.sol";
+import "../hooks/HooksLogicERC1155.sol";
 
 /**
  * @title TestHooksERC1155
- * @notice Concrete ERC-1155 hooks for testing. Records every accessible hook invocation
- *         and exposes admin toggles to drive every branch in the token's pipeline.
- *
- * Exercises IntegrityERC1155.hookMint() via the base's _mintFromHooks — minting
- * authority isn't a separately declared capability; see IHooks.sol.
+ * @notice Concrete ERC-1155 hooks logic for testing. Records every accessible
+ *         hook invocation and exposes admin toggles to drive every branch in
+ *         the token's pipeline. Deployed as Logic → Wrapper → Token; this
+ *         contract never calls the wrapper or token — the wrapper calls it.
  *
  * Transfer denial goes through _onValidateTransfer, the authoritative deny gate —
  * not through a revert in _onBeforeTransfer, which IHooksERC20 rule 2 reserves for
  * settle-only notification.
  */
-contract TestHooksERC1155 is HooksERC1155 {
+contract TestHooksERC1155 is HooksLogicERC1155 {
     // ─── Call Record Structs ─────────────────────────────────────────────────
 
     struct TransferRecord {
@@ -69,7 +68,7 @@ contract TestHooksERC1155 is HooksERC1155 {
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     constructor(address _issuerAdmin, string memory baseTokenURI, string memory contractURI_)
-        HooksERC1155(_issuerAdmin, baseTokenURI, contractURI_)
+        HooksLogicERC1155(_issuerAdmin, baseTokenURI, contractURI_)
     {}
 
     // ─── Admin Controls (global) ─────────────────────────────────────────────
@@ -104,11 +103,6 @@ contract TestHooksERC1155 is HooksERC1155 {
     function setBlockBurnsById(uint256 id, bool blocked, string calldata reason) external onlyIssuerAdmin {
         blockBurnsById[id] = blocked;
         blockBurnReasonById[id] = reason;
-    }
-
-    /// @notice Exercises IntegrityERC1155.hookMint() — direct hook-gated mint.
-    function issuerMint(address to, uint256 id, uint256 amount) external onlyIssuerAdmin {
-        _mintFromHooks(to, id, amount);
     }
 
     // ─── Deny Gates ──────────────────────────────────────────────────────────
@@ -150,7 +144,7 @@ contract TestHooksERC1155 is HooksERC1155 {
         return (true, "");
     }
 
-    // Called by HooksERC1155.afterMint.
+    // Called by HooksLogicERC1155.afterMint.
     function _onAfterMint(
         address to,
         uint256 id,
@@ -170,7 +164,7 @@ contract TestHooksERC1155 is HooksERC1155 {
         return (true, "");
     }
 
-    // Called by HooksERC1155.afterBurn.
+    // Called by HooksLogicERC1155.afterBurn.
     function _onAfterBurn(address from, uint256 id, uint256 amount) internal override {
         afterBurnLog.push(BurnRecord(from, id, amount));
     }

@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.34;
 
-import "../hooks/HooksERC20.sol";
+import "../hooks/HooksLogicERC20.sol";
 
 /**
  * @title TestHooksERC20
- * @notice Concrete ERC-20 hooks for testing. Records every hook invocation and
- *         exposes admin toggles to drive every branch in the token's pipeline.
- *
- * Exercises IntegrityERC20.hookMint() via the base's _mintFromHooks — minting
- * authority isn't a separately declared capability; see IHooks.sol.
+ * @notice Concrete ERC-20 hooks logic for testing. Records every hook invocation
+ *         and exposes admin toggles to drive every branch in the token's
+ *         pipeline. Deployed as Logic → Wrapper → Token; this contract never
+ *         calls the wrapper or token — the wrapper calls it.
  *
  * Transfer denial goes through _onValidateTransfer, the authoritative deny gate —
  * not through a revert in _onBeforeTransfer, which IHooksERC20 rule 2 reserves for
  * settle-only notification.
  */
-contract TestHooksERC20 is HooksERC20 {
+contract TestHooksERC20 is HooksLogicERC20 {
     // ─── Call Record Structs ─────────────────────────────────────────────────
 
     struct TransferRecord {
@@ -59,7 +58,7 @@ contract TestHooksERC20 is HooksERC20 {
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     constructor(address _issuerAdmin, string memory tokenName, string memory tokenSymbol, string memory contractURI_)
-        HooksERC20(_issuerAdmin, tokenName, tokenSymbol, contractURI_)
+        HooksLogicERC20(_issuerAdmin, tokenName, tokenSymbol, contractURI_)
     {}
 
     // ─── Admin Controls ──────────────────────────────────────────────────────
@@ -83,11 +82,6 @@ contract TestHooksERC20 is HooksERC20 {
     ///         a broken hooks contract from bricking the token.
     function setRevertInAfterHooks(bool enabled) external onlyIssuerAdmin {
         revertInAfterHooks = enabled;
-    }
-
-    /// @notice Exercises IntegrityERC20.hookMint().
-    function issuerMint(address to, uint256 amount) external onlyIssuerAdmin {
-        _mintFromHooks(to, amount);
     }
 
     // ─── Deny Gates ──────────────────────────────────────────────────────────

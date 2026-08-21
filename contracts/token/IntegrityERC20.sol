@@ -4,8 +4,7 @@ pragma solidity ^0.8.34;
 import "../interfaces/Types.sol";
 import "../interfaces/Errors.sol";
 import "./IntegrityTokenBase.sol";
-import "../hooks/HooksERC20.sol";
-import "../interfaces/IHooks.sol";
+import "../hooks/HooksWrapperERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
@@ -14,39 +13,43 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  * @notice The user-facing ERC-20 token contract. Users call transfer(),
  *         approve(), etc. directly on this contract. Contains ALL token
  *         storage and the full locked transfer pipeline, and delegates policy
- *         decisions to an external developer-deployed hooks contract.
+ *         decisions to an external wrapper contract.
  *
  * ARCHITECTURE:
  *   This contract IS the token. It holds all state (balances, allowances, admin
  *   state) and contains the full transfer pipeline. Developers customize behavior
- *   by deploying a separate hooks contract inheriting HooksERC20. The token calls
- *   hooks via external CALL — the hooks contract has its own storage and CANNOT
- *   access or modify token state.
+ *   by inheriting HooksLogicERC20, whose constructor deploys a HooksWrapperERC20,
+ *   which deploys THIS contract. The token calls its wrapper via external CALL —
+ *   the wrapper (and the logic contract behind it) has its own storage and
+ *   CANNOT access or modify token state.
  *
  * INHERITS:
  *   IntegrityTokenBase — reentrancy guard, IIntegrityToken partial implementation
  *   TokenAdmin (via Base) — issuer admin, pause/unpause
  *
  * DEPLOYMENT:
- *   1. Developer deploys their hooks contract (inherits HooksERC20)
- *   2. That hooks contract's own constructor deploys THIS contract directly via
+ *   1. Developer deploys their logic contract (inherits HooksLogicERC20)
+ *   2. Its constructor deploys a HooksWrapperERC20
+ *   3. The wrapper's constructor deploys THIS contract directly via
  *      `new IntegrityERC20(...)` and wires itself as governor — no factory, no
  *      separate registration step
- *   3. Users interact with THIS contract for all ERC-20 operations
+ *   4. Users interact with THIS contract for all ERC-20 operations
  *
  * SECURITY:
  *   - transfer(), transferFrom(), approve() are non-virtual (concrete contract)
  *   - Transfer pipeline is non-overridable (this contract is not abstract)
- *   - Hooks run via external CALL — they cannot access token storage. The sole
- *     exception is hookMint, which grants the hooks contract real minting
- *     authority. There is no separate ERC-165 marker for this — see IHooks.sol
- *     for why one wouldn't be enforceable anyway.
- *   - Hooks address is read from msg.sender at construction time and stored in a
- *     plain, setter-less slot — never immutable, so this contract's own runtime
- *     bytecode stays byte-identical across every deployment. See IntegrityVerifier.sol.
+ *   - The wrapper is called via external CALL — it cannot access token storage.
+ *     There is no path in the other direction: nothing on the hooks side can
+ *     ever call back into this contract. Mint and burn are exclusively
+ *     issuer-admin-gated, unconditionally — not something a hooks contract can
+ *     trigger under any circumstance.
+ *   - Wrapper address is read from msg.sender at construction time and stored in
+ *     a plain, setter-less slot — never immutable, so this contract's own
+ *     runtime bytecode stays byte-identical across every deployment. See
+ *     IntegrityVerifier.sol.
  *   - Strict ERC-20 superset: zero-value transfers succeed, as the standard requires.
  */
-contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
+contract IntegrityERC20 is IERC20, IntegrityTokenBase {
     // =========================================================================
     //                          EVENTS
     // =========================================================================
@@ -54,12 +57,12 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     event HookCallFailed(string hookName, bytes reason);
 
     // =========================================================================
-    //                     HOOKS CONTRACT (plain storage, setter-less)
+    //                     WRAPPER CONTRACT (plain storage, setter-less)
     // =========================================================================
 
-    /// @notice The hooks contract that deployed and governs this token. Never
+    /// @notice The wrapper that deployed and governs this token. Never
     ///         address(0). Deliberately not `immutable`: see contract NatSpec.
-    HooksERC20 private _hooks;
+    HooksWrapperERC20 private _hooks;
 
     // =========================================================================
     //                     TOKEN STORAGE
@@ -77,12 +80,12 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     //                          CONSTRUCTOR
     // =========================================================================
 
-    /// @notice Deployed by its own hooks contract, via `new`, from inside that
+    /// @notice Deployed by its own wrapper, via `new`, from inside that
     ///         contract's constructor.
     constructor(address admin, string memory tokenName, string memory tokenSymbol, string memory initialContractURI)
         IntegrityTokenBase(admin, initialContractURI)
     {
-        _hooks = HooksERC20(msg.sender);
+        _hooks = HooksWrapperERC20(msg.sender);
         _name = tokenName;
         _symbol = tokenSymbol;
     }
@@ -175,7 +178,8 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     //                     ISSUER ADMIN: MINT / BURN
     // =========================================================================
 
-    /// @notice Mint tokens. Only callable by issuer admin.
+    /// @notice Mint tokens. Only callable by issuer admin. This is the ONLY way
+    ///         supply can ever increase — there is no hook-initiated mint path.
     /// @param to Recipient address.
     /// @param amount Token amount to mint.
     /// @param data Arbitrary data forwarded to hooks.
@@ -214,23 +218,6 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         catch (bytes memory failReason) {
             emit HookCallFailed("afterBurn", failReason);
         }
-    }
-
-    // =========================================================================
-    //                     HOOKS-INITIATED MINT
-    // =========================================================================
-
-    /// @notice Mint tokens initiated by the hooks contract. Skips beforeMint/afterMint
-    ///         callbacks to avoid circular calls.
-    /// @dev Only callable by the hooks contract. This is real minting authority;
-    ///      see IHooks.sol.
-    function hookMint(address to, uint256 amount) external override whenNotPaused nonReentrant {
-        if (msg.sender != address(_hooks)) revert NotHooksContract();
-        if (to == address(0)) revert ZeroAddress();
-
-        _totalSupply += amount;
-        _balances[to] += amount;
-        emit Transfer(address(0), to, amount);
     }
 
     // =========================================================================

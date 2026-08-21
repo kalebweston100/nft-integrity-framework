@@ -12,7 +12,7 @@ contract IntegrityERC721Test is Fixtures {
     IntegrityERC721 internal token;
 
     function setUp() public {
-        (hooks, token) = _deployERC721(admin);
+        (hooks,, token) = _deployERC721(admin);
     }
 
     // ─── Mint / burn ─────────────────────────────────────────────────────────
@@ -194,22 +194,6 @@ contract IntegrityERC721Test is Fixtures {
 
         assertEq(token.ownerOf(1), bob, "transfer must still settle");
         assertEq(hooks.afterTransferCount(), 0, "after-hook did revert");
-    }
-
-    // ─── Hook-initiated mint ─────────────────────────────────────────────────
-
-    function test_hookMint_onlyCallableByHooksContract() public {
-        vm.prank(admin);
-        vm.expectRevert(NotHooksContract.selector);
-        token.hookMint(alice, 1);
-    }
-
-    function test_hookMint_viaHooksContract() public {
-        vm.prank(admin);
-        hooks.issuerMint(alice, 7);
-
-        assertEq(token.ownerOf(7), alice);
-        assertEq(token.totalSupply(), 1);
     }
 
     // ─── Metadata ────────────────────────────────────────────────────────────

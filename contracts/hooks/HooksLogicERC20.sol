@@ -1,83 +1,69 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.8.34;
 
-import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
-import "../token/IntegrityERC20.sol";
-import "../interfaces/IHooksERC20.sol";
-import "../interfaces/IHooks.sol";
 import "./HooksAdmin.sol";
+import "./HooksWrapperERC20.sol";
 
 /**
- * @title HooksERC20
- * @notice Abstract base for ERC-20 hooks contracts. Provides the full hook
- *         framework, access control, and deploys its own token. Implements
- *         IHooksERC20 — see that interface for the normative rules this
- *         contract's calling convention follows.
+ * @title HooksLogicERC20
+ * @notice Abstract base a developer inherits to write custom ERC-20 hook policy.
+ *         Its constructor deploys a HooksWrapperERC20, which in turn deploys the
+ *         IntegrityERC20 token — so deploying your logic contract is the single
+ *         transaction that brings the whole chain (Logic → Wrapper → Token) into
+ *         existence.
  *
- * DEPLOYMENT FLOW:
- *   Deploy MyHooks(issuerAdmin, name, symbol, contractURI) inheriting HooksERC20
- *   — its constructor deploys the IntegrityERC20 token directly
- *   (`new IntegrityERC20(...)`) and wires itself as governor. There is no factory
- *   and no separate initialization step: `token` is set once, synchronously, as
- *   the return value of `new`.
+ * CALL DIRECTION: the wrapper calls this contract (gated `onlyWrapper`); this
+ * contract never calls back into the wrapper or the token. There is no
+ * hook-initiated write path anywhere in this framework — mint/burn are
+ * exclusively issuer-admin-gated on the token, unconditionally, not something a
+ * hooks contract can trigger under any circumstance. See IntegrityERC20.sol.
  *
  * EXTENSION:
- *   Every hook in the calling convention has an internal `virtual` counterpart.
- *   Override the `_on*` function, never the external one — the external functions
- *   carry `onlyToken` and are deliberately non-virtual so an override cannot
- *   remove that check.
+ *   Every hook has an internal `virtual` counterpart. Override the `_on*`
+ *   function, never the external one — the external functions carry
+ *   `onlyWrapper` and are deliberately non-virtual so an override cannot remove
+ *   that check.
  *
  *     Deny gates (fail-closed):
  *       _onValidateTransfer  → return (false, reason) to block a transfer
  *       _onBeforeMint        → return (false, reason) to block a mint
  *       _onBeforeBurn        → return (false, reason) to block a burn
  *
- *     Notifications (fail-open, try/catch-wrapped by the token):
+ *     Notifications (fail-open, try/catch-wrapped by the token around the
+ *     entire Token → Wrapper → Logic call chain):
  *       _onBeforeTransfer, _onAfterTransfer, _onAfterMint, _onAfterBurn
  *
  *   Use _onValidateTransfer — not a revert in _onBeforeTransfer — to deny a
  *   transfer. beforeTransfer is a settle-only notification per IHooksERC20 rule 2.
- *
- * MINTING AUTHORITY:
- *   _mintFromHooks(to, amount) calls IntegrityERC20.hookMint, which is real
- *   minting authority over the token — a deliberate, narrow capability for use
- *   cases like mint-on-deposit. Nothing requires a subclass to call it; document
- *   prominently if yours does. See IHooks.sol for why this isn't split into a
- *   separately declared ERC-165 capability.
  *
  * HOOK EXECUTION ORDER:
  *   TRANSFER: pause → beforeTransfer → validateTransfer → balance → afterTransfer
  *   MINT:     beforeMint → balance → afterMint
  *   BURN:     balance check → beforeBurn → balance → afterBurn
  */
-abstract contract HooksERC20 is IHooksERC20, ERC165, HooksAdmin {
-    /// @notice The IntegrityERC20 this hooks contract deployed and governs.
-    IntegrityERC20 public immutable token;
+abstract contract HooksLogicERC20 is HooksAdmin {
+    /// @notice The wrapper this logic contract deployed. Immutable is fine here —
+    ///         unlike the wrapper and the token, this contract was never going to
+    ///         have one universal codehash across the ecosystem; it carries
+    ///         real, per-developer custom logic by design.
+    HooksWrapperERC20 public immutable wrapper;
 
-    modifier onlyToken() {
-        require(msg.sender == address(token), "Hooks: Not token contract");
+    modifier onlyWrapper() {
+        require(msg.sender == address(wrapper), "Hooks: Not wrapper contract");
         _;
     }
 
     constructor(address _issuerAdmin, string memory tokenName, string memory tokenSymbol, string memory contractURI_)
         HooksAdmin(_issuerAdmin)
     {
-        token = new IntegrityERC20(_issuerAdmin, tokenName, tokenSymbol, contractURI_);
-    }
-
-    function _mintFromHooks(address to, uint256 amount) internal {
-        token.hookMint(to, amount);
-    }
-
-    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
-        return interfaceId == type(IHooksERC20).interfaceId || super.supportsInterface(interfaceId);
+        wrapper = new HooksWrapperERC20(_issuerAdmin, tokenName, tokenSymbol, contractURI_);
     }
 
     // =========================================================================
-    //                          TRANSFER HOOKS
+    //                          TRANSFER
     // =========================================================================
 
-    function beforeTransfer(address from, address to, uint256 amount) external override onlyToken {
+    function beforeTransfer(address from, address to, uint256 amount) external onlyWrapper {
         _onBeforeTransfer(from, to, amount);
     }
 
@@ -88,8 +74,7 @@ abstract contract HooksERC20 is IHooksERC20, ERC165, HooksAdmin {
     function validateTransfer(address from, address to, uint256 amount)
         external
         view
-        override
-        onlyToken
+        onlyWrapper
         returns (bool valid, string memory reason)
     {
         return _onValidateTransfer(from, to, amount);
@@ -105,20 +90,19 @@ abstract contract HooksERC20 is IHooksERC20, ERC165, HooksAdmin {
         return (true, "");
     }
 
-    function afterTransfer(address from, address to, uint256 amount) external override onlyToken {
+    function afterTransfer(address from, address to, uint256 amount) external onlyWrapper {
         _onAfterTransfer(from, to, amount);
     }
 
     function _onAfterTransfer(address from, address to, uint256 amount) internal virtual {}
 
     // =========================================================================
-    //                            MINT HOOKS
+    //                            MINT
     // =========================================================================
 
     function beforeMint(address to, uint256 amount, bytes calldata data)
         external
-        override
-        onlyToken
+        onlyWrapper
         returns (bool allowed, string memory reason)
     {
         return _onBeforeMint(to, amount, data);
@@ -132,20 +116,19 @@ abstract contract HooksERC20 is IHooksERC20, ERC165, HooksAdmin {
         return (true, "");
     }
 
-    function afterMint(address to, uint256 amount, bytes calldata data) external override onlyToken {
+    function afterMint(address to, uint256 amount, bytes calldata data) external onlyWrapper {
         _onAfterMint(to, amount, data);
     }
 
     function _onAfterMint(address to, uint256 amount, bytes calldata data) internal virtual {}
 
     // =========================================================================
-    //                            BURN HOOKS
+    //                            BURN
     // =========================================================================
 
     function beforeBurn(address from, uint256 amount)
         external
-        override
-        onlyToken
+        onlyWrapper
         returns (bool allowed, string memory reason)
     {
         return _onBeforeBurn(from, amount);
@@ -155,7 +138,7 @@ abstract contract HooksERC20 is IHooksERC20, ERC165, HooksAdmin {
         return (true, "");
     }
 
-    function afterBurn(address from, uint256 amount) external override onlyToken {
+    function afterBurn(address from, uint256 amount) external onlyWrapper {
         _onAfterBurn(from, amount);
     }
 
