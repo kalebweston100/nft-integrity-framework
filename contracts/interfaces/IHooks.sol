@@ -9,10 +9,15 @@ pragma solidity ^0.8.34;
  *
  * A token that exposes any of these grants its hooks contract real minting
  * authority. That is a deliberate, narrow capability for use cases like
- * "mint on deposit" — but it IS authority, and it must be discoverable rather
- * than buried in documentation. A hooks contract that uses it declares
- * IHookMinter via ERC-165 so an integrator can detect it from the hooks address
- * alone. See IHookMinter below.
+ * "mint on deposit" — but it IS authority, so any hooks author using it should
+ * document it prominently rather than relying on a reader to notice the call.
+ *
+ * There is no ERC-165 marker for this capability. `token` is public on every
+ * `Hooks*` base and `hookMint` is gated only on "caller is the governing hooks
+ * contract" — so any hooks contract, whether or not it advertises minting, can
+ * call it. A declared marker would only ever be a claim an honest author made
+ * voluntarily, never something enforceable, so it isn't worth the extra
+ * interface: read the hooks contract's source to know whether it mints.
  */
 
 /// @notice Hook-initiated minting on IntegrityERC20.
@@ -30,39 +35,4 @@ interface IHookMintERC721 {
 interface IHookMintERC1155 {
     function hookMint(address to, uint256 id, uint256 amount) external;
     function hookSetTokenURI(uint256 id, string calldata newURI) external;
-}
-
-/**
- * @title IHookMinter
- * @notice Optional capability marker, declared by a HOOKS contract via ERC-165.
- *
- * The core IHooksERC20/721/1155 interfaces describe a deny-only calling
- * convention: every function in them can block an action but none can cause
- * one. A hooks contract that additionally holds minting authority over its
- * token — i.e. one that calls `hookMint` — MUST also return true from
- * `supportsInterface(type(IHookMinter).interfaceId)`.
- *
- * This turns the framework's single largest trust caveat into a machine-readable
- * bit. An integrator reading a hooks address can distinguish:
- *
- *   supportsInterface(IHooksERC721)  && !supportsInterface(IHookMinter)
- *       → this hooks contract can only restrict; supply is issuer-admin-gated.
- *
- *   supportsInterface(IHooksERC721)  &&  supportsInterface(IHookMinter)
- *       → this hooks contract can mint at will; its logic is part of the
- *         token's supply policy and must be read before trusting supply.
- *
- * NOTE ON WHAT ERC-165 CAN AND CANNOT TELL YOU: declaring an interface is a
- * claim, not a proof. A hostile hooks contract can omit IHookMinter and still
- * mint, or declare conformance it does not honour. This bit is a good-faith
- * disclosure that makes honest integrations legible — it is NOT a security
- * boundary. The only way to know what a hooks contract actually does is to read
- * its code and verify the deployment runs that code (see
- * contracts/libraries/IntegrityVerifier.sol).
- */
-interface IHookMinter {
-    /// @notice Marker only — never called. Present so the interface has a stable
-    ///         ERC-165 id. Implementations return the address of the token whose
-    ///         minting authority this hooks contract holds.
-    function mintingAuthorityOver() external view returns (address);
 }

@@ -107,29 +107,18 @@ non-virtual so an override cannot remove that check.
 Deny a transfer through `_onValidateTransfer`, not by reverting in
 `_onBeforeTransfer` — `beforeTransfer` is a settle-only notification.
 
-### Minting authority is a declared capability
+### Minting authority
 
-`hookMint` is the only path by which a hooks contract can write token state. It
-exists for cases like mint-on-deposit, but it *is* authority, so it's split out
-rather than buried in documentation:
-
-- Inherit `HooksERC721` (or `…ERC20`/`…ERC1155`) → deny-only. Supply stays
-  issuer-admin-gated.
-- Inherit `HooksERC721Minter` → additionally declares `IHookMinter` via ERC-165.
-
-An integrator reading a hooks address can then tell the two apart:
-
-```solidity
-hooks.supportsInterface(type(IHooksERC721).interfaceId)   // follows the convention
-hooks.supportsInterface(type(IHookMinter).interfaceId)    // …and can mint
-```
-
-**What ERC-165 does and does not tell you.** Declaring an interface is a claim
-any contract can make, not a proof. A hostile hooks contract can omit
-`IHookMinter` and mint anyway, or claim conformance it doesn't honour. These
-bits make honest integrations legible; they are not a security boundary. The
-only way to know what a hooks contract does is to read its code — and then
-verify the deployment runs that code.
+`hookMint` is the only path by which a hooks contract can write token state,
+available via `_mintFromHooks` on every `Hooks*` base. It exists for cases like
+mint-on-deposit, and it *is* real authority over supply — but there is
+deliberately no ERC-165 marker for it. `token` is `public` and the token's
+`hookMint` gates only on "caller is the governing hooks contract", so any hooks
+contract can call it whether or not it advertises doing so; a declared
+capability bit would only ever be a claim an honest author made voluntarily,
+never something enforceable. Knowing whether a given hooks contract mints means
+reading its source — the same requirement as knowing anything else about what
+a hooks contract does.
 
 ## Verifying a deployment
 
@@ -253,15 +242,15 @@ the `canonical*Hash()` helpers rather than pasting literals.
 | Locked transfer/mint/burn pipeline | ✅ | ✅ | ✅ |
 | Full overridable hook surface (deny gates + notifications) | ✅ | ✅ | ✅ |
 | `IHooksERC*` conformance + ERC-165 discovery | ✅ | ✅ | ✅ |
-| `IHookMinter` capability split | ✅ | ✅ | ✅ |
 | Compile-time canonical hash + pairing check | ✅ | ✅ | ✅ |
 | Pause / issuer admin transfer | ✅ | ✅ | ✅ |
 | ERC-2981 royalty info | — | ✅ | ✅ |
 | Example hooks contracts (`contracts/test/`) | ✅ | ✅ | ✅ |
 
 Also present: a shared `Errors.sol` (custom errors, no revert strings on hot
-paths), `Types.sol` (`TokenStandard` enum), and `IHooks.sol` (the token-side
-`hookMint` entry points plus the `IHookMinter` capability marker).
+paths), `Types.sol` (`TokenStandard` enum), `IHooks.sol` (the token-side
+`hookMint` entry points), and `HooksAdmin.sol` (the `issuerAdmin` /
+`transferAdmin` bookkeeping shared by all three `Hooks*` bases).
 
 ## Development
 

@@ -8,15 +8,14 @@ import "../hooks/HooksERC20.sol";
  * @notice Concrete ERC-20 hooks for testing. Records every hook invocation and
  *         exposes admin toggles to drive every branch in the token's pipeline.
  *
- * Inherits HooksERC20Minter, so it declares IHookMinter via ERC-165 and can
- * exercise IntegrityERC20.hookMint(). A hooks contract that does NOT need minting
- * authority should inherit plain HooksERC20 instead.
+ * Exercises IntegrityERC20.hookMint() via the base's _mintFromHooks — minting
+ * authority isn't a separately declared capability; see IHooks.sol.
  *
  * Transfer denial goes through _onValidateTransfer, the authoritative deny gate —
  * not through a revert in _onBeforeTransfer, which IHooksERC20 rule 2 reserves for
  * settle-only notification.
  */
-contract TestHooksERC20 is HooksERC20Minter {
+contract TestHooksERC20 is HooksERC20 {
     // ─── Call Record Structs ─────────────────────────────────────────────────
 
     struct TransferRecord {
@@ -60,7 +59,7 @@ contract TestHooksERC20 is HooksERC20Minter {
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     constructor(address _issuerAdmin, string memory tokenName, string memory tokenSymbol, string memory contractURI_)
-        HooksERC20Minter(_issuerAdmin, tokenName, tokenSymbol, contractURI_)
+        HooksERC20(_issuerAdmin, tokenName, tokenSymbol, contractURI_)
     {}
 
     // ─── Admin Controls ──────────────────────────────────────────────────────

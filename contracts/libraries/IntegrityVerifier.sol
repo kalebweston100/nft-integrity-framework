@@ -53,8 +53,9 @@ import "../token/IntegrityERC1155.sol";
  * holds the arbitrary logic and is deliberately NOT covered by any universal
  * hash — hooks contracts carry per-developer state and immutables by design. A
  * canonical token governed by hostile hooks can still deny every transfer, or
- * mint without limit if its hooks contract holds minting authority (check
- * `supportsInterface(type(IHookMinter).interfaceId)` on the hooks address).
+ * mint without limit if its hooks contract calls the token's hookMint entry
+ * point (there is no ERC-165 marker for this — see IHooks.sol — so knowing
+ * whether a given hooks contract mints means reading its source).
  * Verifying a specific hooks implementation with `isCanonical` below is still
  * meaningful; it just answers a narrower question — "does this address run
  * exactly the code its author published for THIS hooks contract" — rather than

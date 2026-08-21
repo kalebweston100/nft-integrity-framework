@@ -8,15 +8,14 @@ import "../hooks/HooksERC721.sol";
  * @notice Concrete ERC-721 hooks for testing. Records every hook invocation and
  *         exposes admin toggles to drive every branch in the token's pipeline.
  *
- * Inherits HooksERC721Minter, so it declares IHookMinter via ERC-165 and can
- * exercise IntegrityERC721.hookMint(). A hooks contract that does NOT need
- * minting authority should inherit plain HooksERC721 instead.
+ * Exercises IntegrityERC721.hookMint() via the base's _mintFromHooks — minting
+ * authority isn't a separately declared capability; see IHooks.sol.
  *
  * Note that transfer denial goes through _onValidateTransfer, the authoritative
  * deny gate — not through a revert in _onBeforeTransfer, which IHooksERC20 rule 2
  * reserves for settle-only notification.
  */
-contract TestHooksERC721 is HooksERC721Minter {
+contract TestHooksERC721 is HooksERC721 {
     // ─── Call Record Structs ─────────────────────────────────────────────────
 
     struct TransferRecord {
@@ -68,7 +67,7 @@ contract TestHooksERC721 is HooksERC721Minter {
         string memory tokenSymbol,
         string memory contractURI_,
         string memory baseURI_
-    ) HooksERC721Minter(_issuerAdmin, tokenName, tokenSymbol, contractURI_, baseURI_) {}
+    ) HooksERC721(_issuerAdmin, tokenName, tokenSymbol, contractURI_, baseURI_) {}
 
     // ─── Admin Controls ──────────────────────────────────────────────────────
 

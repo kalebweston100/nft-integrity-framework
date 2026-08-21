@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 import "../token/IntegrityERC20.sol";
 import "../interfaces/IHooksERC20.sol";
 import "../interfaces/IHooks.sol";
+import "./HooksAdmin.sol";
 
 /**
  * @title HooksERC20
@@ -38,43 +39,34 @@ import "../interfaces/IHooks.sol";
  *   transfer. beforeTransfer is a settle-only notification per IHooksERC20 rule 2.
  *
  * MINTING AUTHORITY:
- *   This base grants none. To let the hooks contract initiate mints, inherit
- *   HooksERC20Minter (below), which declares IHookMinter via ERC-165 so the
- *   capability is discoverable from the hooks address alone.
+ *   _mintFromHooks(to, amount) calls IntegrityERC20.hookMint, which is real
+ *   minting authority over the token — a deliberate, narrow capability for use
+ *   cases like mint-on-deposit. Nothing requires a subclass to call it; document
+ *   prominently if yours does. See IHooks.sol for why this isn't split into a
+ *   separately declared ERC-165 capability.
  *
  * HOOK EXECUTION ORDER:
  *   TRANSFER: pause → beforeTransfer → validateTransfer → balance → afterTransfer
  *   MINT:     beforeMint → balance → afterMint
  *   BURN:     balance check → beforeBurn → balance → afterBurn
  */
-abstract contract HooksERC20 is IHooksERC20, ERC165 {
-    event AdminTransferred(address indexed oldAdmin, address indexed newAdmin);
-
+abstract contract HooksERC20 is IHooksERC20, ERC165, HooksAdmin {
     /// @notice The IntegrityERC20 this hooks contract deployed and governs.
     IntegrityERC20 public immutable token;
-    address public issuerAdmin;
 
     modifier onlyToken() {
         require(msg.sender == address(token), "Hooks: Not token contract");
         _;
     }
 
-    modifier onlyIssuerAdmin() {
-        require(msg.sender == issuerAdmin, "Hooks: Not issuer admin");
-        _;
-    }
-
-    constructor(address _issuerAdmin, string memory tokenName, string memory tokenSymbol, string memory contractURI_) {
-        require(_issuerAdmin != address(0), "Hooks: Zero admin address");
-        issuerAdmin = _issuerAdmin;
+    constructor(address _issuerAdmin, string memory tokenName, string memory tokenSymbol, string memory contractURI_)
+        HooksAdmin(_issuerAdmin)
+    {
         token = new IntegrityERC20(_issuerAdmin, tokenName, tokenSymbol, contractURI_);
     }
 
-    function transferAdmin(address newAdmin) external onlyIssuerAdmin {
-        require(newAdmin != address(0), "Hooks: Zero address");
-        address oldAdmin = issuerAdmin;
-        issuerAdmin = newAdmin;
-        emit AdminTransferred(oldAdmin, newAdmin);
+    function _mintFromHooks(address to, uint256 amount) internal {
+        token.hookMint(to, amount);
     }
 
     function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
@@ -168,34 +160,4 @@ abstract contract HooksERC20 is IHooksERC20, ERC165 {
     }
 
     function _onAfterBurn(address from, uint256 amount) internal virtual {}
-}
-
-/**
- * @title HooksERC20Minter
- * @notice HooksERC20 plus hook-initiated minting authority, declared via ERC-165.
- *
- * Inherit this instead of HooksERC20 when your hooks contract needs to mint
- * (e.g. mint-on-deposit). Doing so makes `supportsInterface(IHookMinter)` return
- * true, so an integrator can tell from the hooks address alone that this contract
- * is part of the token's supply policy.
- *
- * This is a disclosure mechanism, not a security boundary — see IHookMinter.
- */
-abstract contract HooksERC20Minter is HooksERC20, IHookMinter {
-    constructor(address _issuerAdmin, string memory tokenName, string memory tokenSymbol, string memory contractURI_)
-        HooksERC20(_issuerAdmin, tokenName, tokenSymbol, contractURI_)
-    {}
-
-    /// @inheritdoc IHookMinter
-    function mintingAuthorityOver() external view override returns (address) {
-        return address(token);
-    }
-
-    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
-        return interfaceId == type(IHookMinter).interfaceId || super.supportsInterface(interfaceId);
-    }
-
-    function _mintFromHooks(address to, uint256 amount) internal {
-        token.hookMint(to, amount);
-    }
 }

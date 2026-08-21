@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 import "../token/IntegrityERC721.sol";
 import "../interfaces/IHooksERC721.sol";
 import "../interfaces/IHooks.sol";
+import "./HooksAdmin.sol";
 
 /**
  * @title HooksERC721
@@ -40,33 +41,27 @@ import "../interfaces/IHooks.sol";
  *   transfer. beforeTransfer is a settle-only notification per IHooksERC20 rule 2.
  *
  * MINTING AUTHORITY:
- *   This base grants none. To let the hooks contract initiate mints, inherit
- *   HooksERC721Minter (below) instead, which declares IHookMinter via ERC-165 so
- *   the capability is discoverable from the hooks address alone.
+ *   _mintFromHooks(to, tokenId) calls IntegrityERC721.hookMint, which is real
+ *   minting authority over the token — a deliberate, narrow capability for use
+ *   cases like mint-on-deposit. Nothing requires a subclass to call it; document
+ *   prominently if yours does. See IHooks.sol for why this isn't split into a
+ *   separately declared ERC-165 capability.
  *
  * HOOK EXECUTION ORDER:
  *   TRANSFER: pause → beforeTransfer → validateTransfer → ownership → afterTransfer
  *   MINT:     beforeMint → ownership → afterMint
  *   BURN:     ownership check → beforeBurn → ownership → afterBurn
  */
-abstract contract HooksERC721 is IHooksERC721, ERC165 {
-    event AdminTransferred(address indexed oldAdmin, address indexed newAdmin);
-
+abstract contract HooksERC721 is IHooksERC721, ERC165, HooksAdmin {
     /// @notice The IntegrityERC721 this hooks contract deployed and governs. Immutable
     ///         and set once, in the constructor, as the direct result of `new` — cheap
     ///         to read here since (unlike the token's own hooks-address storage) hooks
     ///         contracts are expected to carry per-developer state and were never going
     ///         to have one universal codehash across the ecosystem anyway.
     IntegrityERC721 public immutable token;
-    address public issuerAdmin;
 
     modifier onlyToken() {
         require(msg.sender == address(token), "Hooks: Not token contract");
-        _;
-    }
-
-    modifier onlyIssuerAdmin() {
-        require(msg.sender == issuerAdmin, "Hooks: Not issuer admin");
         _;
     }
 
@@ -76,21 +71,20 @@ abstract contract HooksERC721 is IHooksERC721, ERC165 {
         string memory tokenSymbol,
         string memory contractURI_,
         string memory baseURI_
-    ) {
-        require(_issuerAdmin != address(0), "Hooks: Zero admin address");
-        issuerAdmin = _issuerAdmin;
+    ) HooksAdmin(_issuerAdmin) {
         token = new IntegrityERC721(_issuerAdmin, tokenName, tokenSymbol, contractURI_, baseURI_);
-    }
-
-    function transferAdmin(address newAdmin) external onlyIssuerAdmin {
-        require(newAdmin != address(0), "Hooks: Zero address");
-        address oldAdmin = issuerAdmin;
-        issuerAdmin = newAdmin;
-        emit AdminTransferred(oldAdmin, newAdmin);
     }
 
     function _tokenOwnerOf(uint256 tokenId) internal view returns (address) {
         return token.ownerOf(tokenId);
+    }
+
+    function _mintFromHooks(address to, uint256 tokenId) internal {
+        token.hookMint(to, tokenId);
+    }
+
+    function _setTokenURIFromHooks(uint256 tokenId, string memory newURI) internal {
+        token.hookSetTokenURI(tokenId, newURI);
     }
 
     function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
@@ -226,46 +220,4 @@ abstract contract HooksERC721 is IHooksERC721, ERC165 {
     }
 
     function _onAfterSetTokenURI(uint256 tokenId, string calldata newURI) internal virtual {}
-}
-
-/**
- * @title HooksERC721Minter
- * @notice HooksERC721 plus hook-initiated minting authority, declared via ERC-165.
- *
- * Inherit this instead of HooksERC721 when your hooks contract needs to mint
- * (e.g. mint-on-deposit). Doing so makes `supportsInterface(IHookMinter)` return
- * true, so an integrator can tell from the hooks address alone that this contract
- * is part of the token's supply policy.
- *
- * This is a disclosure mechanism, not a security boundary — `token` is public and
- * `hookMint` is gated on the caller being this contract, so a determined author
- * could mint without inheriting this. The point is that the honest path is also
- * the discoverable one. Verifying what a hooks contract actually does still means
- * reading its code; see IntegrityVerifier.sol for confirming a deployment runs it.
- */
-abstract contract HooksERC721Minter is HooksERC721, IHookMinter {
-    constructor(
-        address _issuerAdmin,
-        string memory tokenName,
-        string memory tokenSymbol,
-        string memory contractURI_,
-        string memory baseURI_
-    ) HooksERC721(_issuerAdmin, tokenName, tokenSymbol, contractURI_, baseURI_) {}
-
-    /// @inheritdoc IHookMinter
-    function mintingAuthorityOver() external view override returns (address) {
-        return address(token);
-    }
-
-    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
-        return interfaceId == type(IHookMinter).interfaceId || super.supportsInterface(interfaceId);
-    }
-
-    function _mintFromHooks(address to, uint256 tokenId) internal {
-        token.hookMint(to, tokenId);
-    }
-
-    function _setTokenURIFromHooks(uint256 tokenId, string memory newURI) internal {
-        token.hookSetTokenURI(tokenId, newURI);
-    }
 }

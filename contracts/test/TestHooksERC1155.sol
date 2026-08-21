@@ -8,15 +8,14 @@ import "../hooks/HooksERC1155.sol";
  * @notice Concrete ERC-1155 hooks for testing. Records every accessible hook invocation
  *         and exposes admin toggles to drive every branch in the token's pipeline.
  *
- * Inherits HooksERC1155Minter, so it declares IHookMinter via ERC-165 and can
- * exercise IntegrityERC1155.hookMint(). A hooks contract that does NOT need
- * minting authority should inherit plain HooksERC1155 instead.
+ * Exercises IntegrityERC1155.hookMint() via the base's _mintFromHooks — minting
+ * authority isn't a separately declared capability; see IHooks.sol.
  *
  * Transfer denial goes through _onValidateTransfer, the authoritative deny gate —
  * not through a revert in _onBeforeTransfer, which IHooksERC20 rule 2 reserves for
  * settle-only notification.
  */
-contract TestHooksERC1155 is HooksERC1155Minter {
+contract TestHooksERC1155 is HooksERC1155 {
     // ─── Call Record Structs ─────────────────────────────────────────────────
 
     struct TransferRecord {
@@ -70,7 +69,7 @@ contract TestHooksERC1155 is HooksERC1155Minter {
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     constructor(address _issuerAdmin, string memory baseTokenURI, string memory contractURI_)
-        HooksERC1155Minter(_issuerAdmin, baseTokenURI, contractURI_)
+        HooksERC1155(_issuerAdmin, baseTokenURI, contractURI_)
     {}
 
     // ─── Admin Controls (global) ─────────────────────────────────────────────

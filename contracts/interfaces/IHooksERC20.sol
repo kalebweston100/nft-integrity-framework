@@ -10,8 +10,8 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  *         policy decisions out to this contract by plain external CALL.
  *
  * This interface is DENY-ONLY. Every function below can block an action; none can
- * cause one. Minting authority is a separate, separately-discoverable capability —
- * see IHookMinter in IHooks.sol. A hooks contract that can mint MUST declare it.
+ * cause one. Hook-initiated minting (IHooks.sol) is a separate, narrow capability
+ * outside this interface — see that file for why it isn't declared via ERC-165.
  *
  * NORMATIVE RULES FOR A CONFORMING HOST TOKEN (requirements on the caller, i.e. the
  * token contract — not enforceable by this interface alone):

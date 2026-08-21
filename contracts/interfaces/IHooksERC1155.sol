@@ -15,8 +15,9 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  * conformance to the underlying token standard, and ERC-165 discovery together
  * with the limits of what discovery proves).
  *
- * This interface is DENY-ONLY. Minting authority is a separate, separately
- * discoverable capability — see IHookMinter in IHooks.sol.
+ * This interface is DENY-ONLY. Hook-initiated minting (IHooks.sol) is a separate,
+ * narrow capability outside this interface — see that file for why it isn't
+ * declared via ERC-165.
  *
  * No separate batch hooks: the token's batch mint/burn/transfer entry points
  * (mintBatch, burnBatch, safeBatchTransferFrom) each loop and fire these same

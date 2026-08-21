@@ -30,8 +30,8 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  *   - Transfer pipeline is non-overridable (this contract is not abstract)
  *   - Hooks run via external CALL — they cannot access token storage. The sole
  *     exception is hookMint/hookSetTokenURI, which grant the hooks contract real
- *     minting authority; a hooks contract that uses them declares IHookMinter via
- *     ERC-165 so the capability is discoverable. See IHooks.sol.
+ *     minting authority. There is no separate ERC-165 marker for this — see
+ *     IHooks.sol for why one wouldn't be enforceable anyway.
  *   - Hooks address is read from msg.sender at construction time (the deploying
  *     contract) and stored in a plain, setter-less slot — never immutable, so this
  *     contract's own runtime bytecode stays byte-identical across every deployment
@@ -255,8 +255,8 @@ contract IntegrityERC721 is IERC721, IERC721Metadata, IERC2981, IHookMintERC721,
     /// @notice Mint an NFT initiated by the hooks contract. Skips beforeMint/afterMint
     ///         callbacks to avoid circular calls (the hooks contract IS the caller, so
     ///         its own logic already ran before invoking this).
-    /// @dev Only callable by the hooks contract. This is real minting authority —
-    ///      a hooks contract that uses it MUST declare IHookMinter via ERC-165.
+    /// @dev Only callable by the hooks contract. This is real minting authority;
+    ///      see IHooks.sol.
     function hookMint(address to, uint256 tokenId) external override whenNotPaused nonReentrant {
         if (msg.sender != address(_hooks)) revert NotHooksContract();
         _mintChecks(to, tokenId);

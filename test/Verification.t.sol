@@ -3,16 +3,9 @@ pragma solidity ^0.8.34;
 
 import "./utils/Fixtures.sol";
 import "../contracts/libraries/IntegrityVerifier.sol";
-import "../contracts/interfaces/IHooks.sol";
 import "../contracts/interfaces/IHooksERC20.sol";
 import "../contracts/interfaces/IHooksERC721.sol";
 import "../contracts/interfaces/IHooksERC1155.sol";
-
-/// @dev A hooks contract that deliberately does NOT take minting authority, so we
-///      can assert IHookMinter is absent when it should be.
-contract NonMintingHooksERC721 is HooksERC721 {
-    constructor(address issuerAdmin_) HooksERC721(issuerAdmin_, "No Mint", "NM", "ipfs://collection", "ipfs://base/") {}
-}
 
 /// @dev Impersonates a legitimate token it does not govern, to exercise the
 ///      mutual-reference check.
@@ -133,23 +126,6 @@ contract VerificationTest is Fixtures {
         assertTrue(h20.supportsInterface(type(IHooksERC20).interfaceId));
         assertTrue(h721.supportsInterface(type(IHooksERC721).interfaceId));
         assertTrue(h1155.supportsInterface(type(IHooksERC1155).interfaceId));
-    }
-
-    /// Minting authority is disclosed as its own capability bit, so an integrator
-    /// can tell a deny-only hooks contract from one that is part of supply policy.
-    function test_erc165_mintingAuthorityIsSeparatelyDiscoverable() public {
-        (TestHooksERC721 minting,) = _deployERC721(admin);
-        NonMintingHooksERC721 denyOnly = new NonMintingHooksERC721(admin);
-
-        // Both conform to the core deny-only calling convention.
-        assertTrue(minting.supportsInterface(type(IHooksERC721).interfaceId));
-        assertTrue(denyOnly.supportsInterface(type(IHooksERC721).interfaceId));
-
-        // Only one of them holds minting authority, and says so.
-        assertTrue(minting.supportsInterface(type(IHookMinter).interfaceId), "minter must declare IHookMinter");
-        assertFalse(denyOnly.supportsInterface(type(IHookMinter).interfaceId), "deny-only must not");
-
-        assertEq(minting.mintingAuthorityOver(), address(minting.token()));
     }
 
     function test_erc165_unknownInterfaceIsFalse() public {
