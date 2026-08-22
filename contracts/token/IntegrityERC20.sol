@@ -4,7 +4,7 @@ pragma solidity ^0.8.34;
 import "../interfaces/Types.sol";
 import "../interfaces/Errors.sol";
 import "./IntegrityTokenBase.sol";
-import "../hooks/HooksWrapperERC20.sol";
+import "../interfaces/IHooksERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
@@ -49,7 +49,16 @@ contract IntegrityERC20 is IERC20, IntegrityTokenBase {
 
     /// @notice The wrapper that deployed and governs this token. Never
     ///         address(0). Deliberately not `immutable`: see contract NatSpec.
-    HooksWrapperERC20 private _hooks;
+    /// @dev    Typed as `IHooksERC20`, NOT the concrete `HooksWrapperERC20`.
+    ///         This is load-bearing, not stylistic: `HooksWrapperERC20` embeds
+    ///         `type(IntegrityERC20).creationCode` in order to deploy it, so
+    ///         naming the concrete wrapper here would make the contract-code
+    ///         dependency graph circular and `type(C).runtimeCode` would stop
+    ///         compiling — taking every canonical hash in IntegrityVerifier
+    ///         with it. Keeping this an interface leaves the graph acyclic so
+    ///         the wrapper can hold a canonical hash of the policy behind it.
+    ///         See docs/SPEC-declarative-policy.md section 2.2.
+    IHooksERC20 private _hooks;
 
     // =========================================================================
     //                     TOKEN STORAGE
@@ -72,7 +81,7 @@ contract IntegrityERC20 is IERC20, IntegrityTokenBase {
     constructor(address admin, string memory tokenName, string memory tokenSymbol, string memory initialContractURI)
         IntegrityTokenBase(admin, initialContractURI)
     {
-        _hooks = HooksWrapperERC20(msg.sender);
+        _hooks = IHooksERC20(msg.sender);
         _name = tokenName;
         _symbol = tokenSymbol;
     }

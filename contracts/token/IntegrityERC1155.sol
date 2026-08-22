@@ -4,7 +4,7 @@ pragma solidity ^0.8.34;
 import "../interfaces/Types.sol";
 import "../interfaces/Errors.sol";
 import "./IntegrityTokenBase.sol";
-import "../hooks/HooksWrapperERC1155.sol";
+import "../interfaces/IHooksERC1155.sol";
 import "../interfaces/IERC1155Receiver.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import "@openzeppelin/contracts/token/ERC1155/extensions/IERC1155MetadataURI.sol";
@@ -53,7 +53,16 @@ contract IntegrityERC1155 is IERC1155, IERC1155MetadataURI, IERC2981, IntegrityT
 
     /// @notice The wrapper that deployed and governs this token. Never
     ///         address(0). Deliberately not `immutable`: see contract NatSpec.
-    HooksWrapperERC1155 private _hooks;
+    /// @dev    Typed as `IHooksERC1155`, NOT the concrete `HooksWrapperERC1155`.
+    ///         This is load-bearing, not stylistic: `HooksWrapperERC1155` embeds
+    ///         `type(IntegrityERC1155).creationCode` in order to deploy it, so
+    ///         naming the concrete wrapper here would make the contract-code
+    ///         dependency graph circular and `type(C).runtimeCode` would stop
+    ///         compiling — taking every canonical hash in IntegrityVerifier
+    ///         with it. Keeping this an interface leaves the graph acyclic so
+    ///         the wrapper can hold a canonical hash of the policy behind it.
+    ///         See docs/SPEC-declarative-policy.md section 2.2.
+    IHooksERC1155 private _hooks;
 
     // =========================================================================
     //                     TOKEN STORAGE
@@ -81,7 +90,7 @@ contract IntegrityERC1155 is IERC1155, IERC1155MetadataURI, IERC2981, IntegrityT
     constructor(address admin, string memory baseTokenURI, string memory initialContractURI)
         IntegrityTokenBase(admin, initialContractURI)
     {
-        _hooks = HooksWrapperERC1155(msg.sender);
+        _hooks = IHooksERC1155(msg.sender);
         _uri = baseTokenURI;
     }
 
