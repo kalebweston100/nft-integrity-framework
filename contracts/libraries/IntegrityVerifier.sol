@@ -7,6 +7,7 @@ import "../token/IntegrityERC1155.sol";
 import "../hooks/HooksWrapperERC20.sol";
 import "../hooks/HooksWrapperERC721.sol";
 import "../hooks/HooksWrapperERC1155.sol";
+import "../verification/CanonicalCode.sol";
 
 /**
  * @title IntegrityVerifier
@@ -163,7 +164,7 @@ library IntegrityVerifier {
     ///      `expectedCodeHash` fails permissively, so always derive it from the
     ///      helpers below rather than pasting a literal.
     function isCanonical(address target, bytes32 expectedCodeHash) internal view returns (bool) {
-        return target.codehash == expectedCodeHash;
+        return CanonicalCode.isCanonical(target, expectedCodeHash);
     }
 
     // =========================================================================
@@ -288,7 +289,7 @@ library IntegrityVerifier {
     bytes32 internal constant TOKEN_SALT = keccak256("IntegrityToken.v1");
 
     function _create2Address(address deployer, bytes32 salt, bytes32 initCodeHash) private pure returns (address) {
-        return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), deployer, salt, initCodeHash)))));
+        return CanonicalCode.addressOf(deployer, salt, initCodeHash);
     }
 
     /// @notice Proves `token` was deployed by `wrapper` running the canonical
@@ -299,12 +300,10 @@ library IntegrityVerifier {
     function isProvenanceVerifiedERC20(address token, address wrapper) internal view returns (bool) {
         if (token == address(0) || wrapper == address(0)) return false;
         IntegrityERC20 t = IntegrityERC20(token);
-        bytes32 initCodeHash = keccak256(
-            abi.encodePacked(
-                type(IntegrityERC20).creationCode, abi.encode(t.deployAdmin(), t.name(), t.symbol(), t.contractURI())
-            )
+        bytes32 initCodeHash = CanonicalCode.initCodeHash(
+            type(IntegrityERC20).creationCode, abi.encode(t.deployAdmin(), t.name(), t.symbol(), t.contractURI())
         );
-        return token == _create2Address(wrapper, TOKEN_SALT, initCodeHash);
+        return CanonicalCode.isProvenanceVerified(token, wrapper, TOKEN_SALT, initCodeHash);
     }
 
     /// @notice Proves `token` was deployed by `wrapper` running the canonical
@@ -313,13 +312,11 @@ library IntegrityVerifier {
     function isProvenanceVerifiedERC721(address token, address wrapper) internal view returns (bool) {
         if (token == address(0) || wrapper == address(0)) return false;
         IntegrityERC721 t = IntegrityERC721(token);
-        bytes32 initCodeHash = keccak256(
-            abi.encodePacked(
-                type(IntegrityERC721).creationCode,
-                abi.encode(t.deployAdmin(), t.name(), t.symbol(), t.contractURI(), t.baseURI())
-            )
+        bytes32 initCodeHash = CanonicalCode.initCodeHash(
+            type(IntegrityERC721).creationCode,
+            abi.encode(t.deployAdmin(), t.name(), t.symbol(), t.contractURI(), t.baseURI())
         );
-        return token == _create2Address(wrapper, TOKEN_SALT, initCodeHash);
+        return CanonicalCode.isProvenanceVerified(token, wrapper, TOKEN_SALT, initCodeHash);
     }
 
     /// @notice Proves `token` was deployed by `wrapper` running the canonical
@@ -328,12 +325,10 @@ library IntegrityVerifier {
     function isProvenanceVerifiedERC1155(address token, address wrapper) internal view returns (bool) {
         if (token == address(0) || wrapper == address(0)) return false;
         IntegrityERC1155 t = IntegrityERC1155(token);
-        bytes32 initCodeHash = keccak256(
-            abi.encodePacked(
-                type(IntegrityERC1155).creationCode, abi.encode(t.deployAdmin(), t.uri(0), t.contractURI())
-            )
+        bytes32 initCodeHash = CanonicalCode.initCodeHash(
+            type(IntegrityERC1155).creationCode, abi.encode(t.deployAdmin(), t.uri(0), t.contractURI())
         );
-        return token == _create2Address(wrapper, TOKEN_SALT, initCodeHash);
+        return CanonicalCode.isProvenanceVerified(token, wrapper, TOKEN_SALT, initCodeHash);
     }
 
     // =========================================================================
