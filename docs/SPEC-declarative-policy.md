@@ -39,25 +39,76 @@ then read bespoke logic by hand. Nobody does that at scale. The target is
 
 ## 2. Architecture
 
-### 2.1 Deployment order inverts
+### 2.1 The wrapper becomes the root and deploys both children
+
+> **Corrected after phase 1.** An earlier draft kept the three-layer cascade
+> and simply swapped the bespoke logic contract for a canonical policy at the
+> root: Policy → Wrapper → Token. That does not compile. The policy would need
+> `type(HooksWrapperERC20).creationCode` to deploy the wrapper, while the
+> wrapper would need `keccak256(type(PolicyERC20).runtimeCode)` to enforce it —
+> a cycle, and exactly the class of failure phase 1 exists to prevent. The
+> ordering below is the version that actually satisfies the DAG.
 
 ```
-                        CURRENT                          PROPOSED
-              Logic (bespoke, unverifiable)      Policy (canonical, declarative)
-                       │ new                              │ new{salt}
-                       ▼                                  ▼
-                    Wrapper                            Wrapper
-                       │ new                              │ new{salt}
-                       ▼                                  ▼
-                     Token                              Token
+             CURRENT                                PROPOSED
+
+  Logic (bespoke, unverifiable)          Wrapper  (deployed by the issuer)
+             │ new                          ├── new{salt} ──▶ Policy (canonical)
+             ▼                              └── new{salt} ──▶ Token
+          Wrapper
+             │ new
+             ▼
+           Token
 ```
 
-Shape is unchanged; the root is replaced by a canonical contract, and both
-`new`s become CREATE2 so each hop is address-committed to its init code.
+The cascade flattens from a chain into a fan. The wrapper is deployed directly
+by the issuer and creates both children, so the issuer's single transaction
+becomes:
 
-The issuer's single transaction becomes `new PolicyERC20(admin, rules, delay,
-name, symbol, contractURI)`. They write no Solidity — they choose rules from a
-vocabulary.
+```solidity
+new HooksWrapperDeclarativeERC20(admin, rules, delay, name, symbol, contractURI);
+```
+
+They write no Solidity — they choose rules from a vocabulary.
+
+Both `new`s are CREATE2, so each child's address commits to its init code and
+`isProvenanceVerified*` extends to the policy exactly as it already does to the
+token.
+
+### 2.1.1 Two wrapper variants, and the hash tells you which
+
+The bespoke `HooksLogicERC*` path is retained (section 6), but one wrapper
+cannot both *be deployed by* a logic contract and *deploy* a policy. So there
+are two canonical wrappers:
+
+| Wrapper | `logic` comes from | Guarantee |
+|---|---|---|
+| `HooksWrapperERC20` | `msg.sender` — arbitrary developer code | Deny-only calling convention |
+| `HooksWrapperDeclarativeERC20` | `new{salt}` — canonical policy | The above, plus enumerable policy |
+
+This is a feature rather than duplication: **the wrapper's codehash alone tells
+an integrator which regime applies**, before they inspect anything else. One
+`EXTCODEHASH` distinguishes "arbitrary policy code" from "enumerable rules."
+
+### 2.2 The dependency DAG must stay acyclic
+
+`type(C).runtimeCode` and `type(C).creationCode` cannot participate in a cycle;
+the compiler rejects it. Under the corrected ordering both children are leaves:
+
+```
+PolicyERC20        imports IHooksERC20 only          ─┐
+IntegrityERC20     imports IHooksERC20 only          ─┤ leaves
+                                                      │
+HooksWrapperDeclarativeERC20                          │
+    needs type(PolicyERC20).creationCode      ────────┘
+    needs type(IntegrityERC20).creationCode
+```
+
+**This is what phase 1 bought.** `IntegrityERC20` previously stored
+`HooksWrapperERC20 private _hooks` and imported the concrete contract, so
+token and wrapper referenced each other. Storing `IHooksERC20` made the token a
+leaf. Verified: `forge inspect IntegrityERC20 metadata` no longer resolves
+`HooksWrapperERC20.sol` at all.
 
 ### 2.2 The dependency DAG must stay acyclic
 
@@ -79,25 +130,22 @@ instead. The call sites are unchanged — the interface already declares every
 hook the token invokes. This is a pure decoupling with no behavioural effect,
 and it is what keeps the graph acyclic.
 
-### 2.3 Enforcement replaces checking
+### 2.3 Canonical by construction, not by check
 
-The wrapper refuses to forward to non-canonical policy:
+An earlier draft had the wrapper hold `CANONICAL_POLICY_HASH` and verify
+`logic.codehash` before each forward, at ~100 gas per transfer. Under the
+corrected ordering that is unnecessary: **the wrapper deploys the policy
+itself**, with `new`, from creation code embedded in its own bytecode. There is
+no setter and no path by which `logic` could be anything else.
 
-```solidity
-bytes32 internal constant CANONICAL_POLICY_HASH = keccak256(type(PolicyERC20).runtimeCode);
+So the guarantee costs zero gas and is stronger — not "the wrapper checks that
+its policy is canonical," but "the wrapper is incapable of having a
+non-canonical policy." Same recurring move as everywhere else in the project:
+make it structurally impossible rather than checked.
 
-function validateTransfer(...) external view onlyToken returns (bool, string memory) {
-    if (logic.codehash != CANONICAL_POLICY_HASH) revert NonCanonicalPolicy();
-    return IHooksERC20(logic).validateTransfer(...);
-}
-```
-
-`logic` is warm on the following line, so `EXTCODEHASH` costs ~100 gas. Applied
-to every forwarding function.
-
-This is the project's recurring move — enforced rather than documented — and it
-is what makes the collapsed verification sound: a canonical wrapper *cannot*
-run non-canonical policy, so proving the wrapper proves the policy.
+What an integrator verifies is correspondingly simpler — that the policy really
+was deployed by this wrapper, via `isProvenanceVerifiedPolicy(policy, wrapper)`,
+which is the CREATE2 derivation already built for the token.
 
 ### 2.4 Why construction-time checks are impossible
 
@@ -278,10 +326,10 @@ prerequisites with no user-visible payoff; the value lands in 3–4.
 
 | # | Change | Gate |
 |---|---|---|
-| 1 | Token stores `IHooksERC20` instead of the concrete wrapper | 76 tests still green; breaks the import cycle |
+| 1 | ✅ Token stores `IHooksERC20` instead of the concrete wrapper | done — `0d78bcb`, 76 green, cycle verified broken |
 | 2 | `TransferContext` replaces positional hook args across all three standards | full suite green; hook authors see one mechanical signature change |
 | 3 | `PolicyERC20` — vocabulary, evaluator, `_onAfterTransfer` state | new unit suite per rule kind, including deny and allow paths |
-| 4 | Wrapper holds `CANONICAL_POLICY_HASH` and enforces it; both `new`s become CREATE2 | test that a non-canonical policy is rejected at call time |
+| 4 | `HooksWrapperDeclarativeERC20` deploys policy + token via CREATE2 | policy is canonical by construction; provenance holds for both children |
 | 5 | `verifyERC20/721/1155` + `Verification` struct | extend `CodehashLimits.t.sol`: impostor policy fails, real chain passes |
 | 6 | 721 and 1155 policy contracts | parity suite |
 
