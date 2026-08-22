@@ -2,9 +2,13 @@
 pragma solidity ^0.8.34;
 
 import "./CanonicalCode.sol";
+import "../interfaces/Types.sol";
+import "../interfaces/IPolicyGoverned.sol";
 import "../engine/PolicyEngine.sol";
 import "../engine/PolicyTypes.sol";
 import "../token/PolicyERC20.sol";
+import "../token/PolicyERC721.sol";
+import "../token/PolicyERC1155.sol";
 
 /**
  * @title PolicyVerification
@@ -26,13 +30,28 @@ import "../token/PolicyERC20.sol";
  * one narrow purpose: to establish that `rules()` is EXHAUSTIVE.
  *
  * ─────────────────────────────────────────────────────────────────────────────
+ * THE CANONICAL SET
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Verification matches a token against a FIXED, FINITE set of hashes — one per
+ * member of contracts/token/. A wallet ships those few constants and can then
+ * verify any token any issuer deploys, on any chain, forever, per version.
+ *
+ * The set being closed is not a limitation to be engineered away; it is the
+ * source of the guarantee. A token outside it is reported as unknown, exactly
+ * as any other ERC-20 would be. There is deliberately no "conformance"
+ * interface a third-party token could implement to be treated as a member:
+ * whatever address a user transacts with decides whether the call reverts, so
+ * only known bytecode can carry the claim.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
  * WHAT MAKES THE ANSWER COMPLETE
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * Two codehashes, and the claim needs both:
  *
  *   tokenCanonical   The entry point runs known code, so the transfer path is
- *                    the one in PolicyERC20 — whose only discretionary revert
+ *                    one of the audited ones — whose only discretionary revert
  *                    is the policy verdict. WITHOUT THIS THE REPORT IS
  *                    MEANINGLESS: an unverified token can `require` anything,
  *                    anywhere, and the rules below would describe one condition
@@ -47,7 +66,8 @@ import "../token/PolicyERC20.sol";
  * required for claims about HISTORY ("these were the launch rules", "supply was
  * only ever minted by the admin"); it is deliberately not attempted here,
  * because the headline claim does not rest on it. See CanonicalCode.sol for the
- * distinction.
+ * distinction, and test/CodehashLimits.t.sol for a demonstration that a
+ * codehash genuinely cannot carry a claim about history.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * ORDERING IS LOAD-BEARING
@@ -59,18 +79,21 @@ import "../token/PolicyERC20.sol";
  * checks would let a hostile contract run before it has been rejected.
  *
  * GAS: `type(C).runtimeCode` embeds the whole blob at the call site. An
- * on-chain consumer should derive the two hashes ONCE in its constructor and
- * store them in `immutable`s — a verifier holding immutables is fine, only the
+ * on-chain consumer should derive the hashes ONCE in its constructor and store
+ * them in `immutable`s — a verifier holding immutables is fine, only the
  * VERIFIED contracts must be immutable-free.
  */
 library PolicyVerification {
     /**
      * @notice The complete verified picture of a token's transfer policy.
      *
-     * @param tokenCanonical  The token runs canonical PolicyERC20 code. If
-     *                        false, every other field is untrustworthy and the
-     *                        report stops here.
+     * @param tokenCanonical  The token runs the code of a member of the
+     *                        canonical set. If false, EVERY OTHER FIELD IS
+     *                        MEANINGLESS — including `standard`, which is left
+     *                        at its zero value rather than detected.
      * @param policyCanonical The engine runs canonical PolicyEngine code.
+     * @param standard        Which member of the set matched. Only meaningful
+     *                        when `tokenCanonical` is true.
      * @param hasExternalGate At least one rule defers to arbitrary code, so
      *                        "no other condition exists" is reduced to whatever
      *                        that contract does.
@@ -90,6 +113,7 @@ library PolicyVerification {
     struct Report {
         bool tokenCanonical;
         bool policyCanonical;
+        TokenStandard standard;
         bool hasExternalGate;
         uint256 swapDelay;
         uint256 pendingAt;
@@ -97,43 +121,108 @@ library PolicyVerification {
         Rule[] rules;
     }
 
-    /// @notice Expected runtime codehash of a canonical PolicyERC20.
-    /// @dev Derived at compile time from imported source, so it cannot drift
-    ///      from the code it describes. Compiles only while PolicyERC20 holds
-    ///      zero immutables — add one and this stops building, by design.
+    // =========================================================================
+    //                            THE CANONICAL SET
+    // =========================================================================
+
+    /// @dev Each hash is derived at compile time from imported source, so it
+    ///      cannot drift from the code it describes. These compile only while
+    ///      every token holds zero immutables — add one and the build breaks,
+    ///      by design.
+
     function canonicalTokenHashERC20() internal pure returns (bytes32) {
         return keccak256(type(PolicyERC20).runtimeCode);
     }
 
+    function canonicalTokenHashERC721() internal pure returns (bytes32) {
+        return keccak256(type(PolicyERC721).runtimeCode);
+    }
+
+    function canonicalTokenHashERC1155() internal pure returns (bytes32) {
+        return keccak256(type(PolicyERC1155).runtimeCode);
+    }
+
     /// @notice Expected runtime codehash of a canonical PolicyEngine.
-    /// @dev One value for every issuer on every chain, forever, per version —
-    ///      which is what makes an off-chain consumer (a wallet, an explorer)
-    ///      practical. Policy varies in storage; this never does.
+    /// @dev One value for every issuer of every standard on every chain,
+    ///      forever, per version — which is what makes an off-chain consumer (a
+    ///      wallet, an explorer) practical. Policy varies in storage; this never
+    ///      does.
     function canonicalPolicyHash() internal pure returns (bytes32) {
         return keccak256(type(PolicyEngine).runtimeCode);
     }
 
+    // =========================================================================
+    //                              VERIFICATION
+    // =========================================================================
+
     /**
-     * @notice Verify a token and enumerate its complete transfer policy.
-     * @dev SAFE AGAINST UNTRUSTED INPUT — no call is made to `token` until its
-     *      codehash has been established, and none to the engine until its own
-     *      has been.
+     * @notice Verify a token against the whole canonical set and enumerate its
+     *         complete transfer policy.
+     * @dev The entry point an integrator should use when it does not already
+     *      know which standard it is looking at — a wallet scanning an unknown
+     *      address, for instance.
+     *
+     *      SAFE AGAINST UNTRUSTED INPUT — no call is made to `token` until its
+     *      codehash has been matched, and none to the engine until its own has
+     *      been.
      *
      *      A false `tokenCanonical` is not necessarily an attack; it is far
-     *      more often an ordinary ERC-20 that simply is not part of this
-     *      framework. Render it as "unknown", not "malicious".
+     *      more often an ordinary token that simply is not part of this set.
+     *      Render it as "unknown", not "malicious".
      */
+    function verify(address token) internal view returns (Report memory report) {
+        bytes32 actual = token.codehash;
+
+        if (actual == canonicalTokenHashERC20()) {
+            report.standard = TokenStandard.ERC20;
+        } else if (actual == canonicalTokenHashERC721()) {
+            report.standard = TokenStandard.ERC721;
+        } else if (actual == canonicalTokenHashERC1155()) {
+            report.standard = TokenStandard.ERC1155;
+        } else {
+            return report;
+        }
+
+        report.tokenCanonical = true;
+        _readPolicy(token, report);
+    }
+
+    /// @notice Verify a token known to be an ERC-20, rejecting other members of
+    ///         the set.
     function verifyERC20(address token) internal view returns (Report memory report) {
-        report.tokenCanonical = CanonicalCode.isCanonical(token, canonicalTokenHashERC20());
+        return _verifyAs(token, canonicalTokenHashERC20(), TokenStandard.ERC20);
+    }
+
+    /// @notice Verify a token known to be an ERC-721.
+    function verifyERC721(address token) internal view returns (Report memory report) {
+        return _verifyAs(token, canonicalTokenHashERC721(), TokenStandard.ERC721);
+    }
+
+    /// @notice Verify a token known to be an ERC-1155.
+    function verifyERC1155(address token) internal view returns (Report memory report) {
+        return _verifyAs(token, canonicalTokenHashERC1155(), TokenStandard.ERC1155);
+    }
+
+    function _verifyAs(address token, bytes32 expected, TokenStandard standard)
+        private
+        view
+        returns (Report memory report)
+    {
+        report.tokenCanonical = CanonicalCode.isCanonical(token, expected);
         if (!report.tokenCanonical) return report;
 
-        // Safe: `token` has been established as canonical PolicyERC20, whose
-        // policy() is a plain getter over a setter-less slot — the same slot
-        // its transfer path reads.
-        address engine = PolicyERC20(token).policy();
+        report.standard = standard;
+        _readPolicy(token, report);
+    }
+
+    /// @dev Only ever reached once `token` has been established as canonical,
+    ///      so `policy()` is a plain getter over a setter-less slot — the same
+    ///      slot the transfer path reads.
+    function _readPolicy(address token, Report memory report) private view {
+        address engine = IPolicyGoverned(token).policy();
 
         report.policyCanonical = CanonicalCode.isCanonical(engine, canonicalPolicyHash());
-        if (!report.policyCanonical) return report;
+        if (!report.policyCanonical) return;
 
         PolicyEngine policy = PolicyEngine(engine);
         report.rules = policy.rules();
@@ -143,9 +232,13 @@ library PolicyVerification {
         (, report.pendingAt) = policy.pendingRules();
     }
 
+    // =========================================================================
+    //                          THE TWO HEADLINE CLAIMS
+    // =========================================================================
+
     /**
-     * @notice The headline claim, as a single boolean.
-     * @dev True means: beyond the ERC-20 standard's own requirements, the ONLY
+     * @notice The general claim, as a single boolean.
+     * @dev True means: beyond the token standard's own requirements, the ONLY
      *      conditions that can block a transfer of this token are the rules in
      *      `report.rules`, and no new KIND of condition can appear without
      *      `report.swapDelay` seconds of public notice.
@@ -158,5 +251,32 @@ library PolicyVerification {
      */
     function isFullyEnumerable(Report memory report) internal pure returns (bool) {
         return report.tokenCanonical && report.policyCanonical && !report.hasExternalGate;
+    }
+
+    /**
+     * @notice The strongest claim the design can make: NOTHING can block a
+     *         transfer of this token.
+     *
+     * @dev Not a degenerate case of isFullyEnumerable — it is the case worth
+     *      leading with. Establishing the ABSENCE of a hidden blocking
+     *      condition is normally impossible: no amount of observed behaviour
+     *      rules out a branch that has not been taken yet, and reading the
+     *      source means reasoning over every path, again after every upgrade.
+     *      A canonical codehash plus an empty rule array settles it by
+     *      construction, in one call, for a token that is otherwise an entirely
+     *      ordinary and fully marketplace-compatible ERC-20/721/1155.
+     *
+     *      `pendingAt == 0` IS PART OF THE CLAIM, not a detail. A token with no
+     *      rules but a pending proposal is unconditional today and may not be
+     *      tomorrow; reporting it as simply unconditional would put a green
+     *      badge on a token that is days away from a lockup. A caller that
+     *      wants the weaker "nothing blocks right now" reading should test the
+     *      fields itself and say so in its UI.
+     *
+     *      An external gate cannot be present when this returns true, since a
+     *      gate is itself a rule and the array is empty.
+     */
+    function isUnconditional(Report memory report) internal pure returns (bool) {
+        return report.tokenCanonical && report.policyCanonical && report.rules.length == 0 && report.pendingAt == 0;
     }
 }

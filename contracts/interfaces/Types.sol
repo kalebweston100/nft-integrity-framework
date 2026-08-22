@@ -3,18 +3,20 @@ pragma solidity ^0.8.34;
 
 /**
  * @title Types
- * @notice Shared data types for the token framework.
+ * @notice Shared data types for the canonical token set.
  */
 
 /**
- * @notice Identifies which token standard a framework token implements.
- * @dev Returned by tokenStandard() on every Integrity* token variant.
- *      Allows external contracts, indexers, and UIs to determine the correct
- *      interaction interface without trial-and-error interface detection.
+ * @notice Identifies which token standard a canonical token implements.
+ * @dev Returned by tokenStandard() on every member of the set, and carried in
+ *      TransferContext so one PolicyEngine can serve all three. Lets an
+ *      integrator pick the right interface without trial-and-error detection,
+ *      and tells a policy reader how to interpret `id` and `amount` in a rule.
  *
- * ERC20    Standard fungible token (EIP-20). Single balance per address.
- * ERC721   Standard non-fungible token (EIP-721). Unique tokenId ownership.
- * ERC1155  Multi-token standard (EIP-1155). Per-tokenId balances, batch operations.
+ * ERC20    Fungible (EIP-20). One balance per address; `id` is unused.
+ * ERC721   Non-fungible (EIP-721). `id` is the token id, `amount` is always 1.
+ * ERC1155  Multi-token (EIP-1155). Per-id balances; both fields are used, and
+ *          supply and holder counts are per-id.
  */
 enum TokenStandard {
     ERC20,

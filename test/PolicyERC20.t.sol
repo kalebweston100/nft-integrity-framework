@@ -3,6 +3,7 @@ pragma solidity ^0.8.34;
 
 import "forge-std/Test.sol";
 import "../contracts/token/PolicyERC20.sol";
+import "../contracts/token/PolicyTokenBase.sol";
 import "../contracts/engine/PolicyEngine.sol";
 import "../contracts/engine/PolicyTypes.sol";
 import "../contracts/verification/PolicyVerification.sol";
@@ -58,7 +59,7 @@ contract PolicyERC20Test is Test {
     // ---- helpers -----------------------------------------------------------
 
     function _token(Rule[] memory rules_) internal returns (PolicyERC20 t) {
-        t = new PolicyERC20(ADMIN, "Token", "TKN", DELAY, rules_);
+        t = new PolicyERC20(ADMIN, "Token", "TKN", 18, DELAY, rules_);
         vm.prank(ADMIN);
         t.mint(ALICE, 1_000e18);
     }
@@ -134,11 +135,23 @@ contract PolicyERC20Test is Test {
     /// A pause would be a blocking condition outside the rule array, which is
     /// exactly what this design forbids — halting transfers must go through the
     /// timelock like any other rule.
+    ///
+    /// The list covers CONFISCATION as well as BLOCKING. An admin able to burn
+    /// from an arbitrary holder can take a token outright, which is strictly
+    /// stronger than freezing it in place; a design that rejects pause() on
+    /// principle cannot accept burn(address,uint256).
     function test_CLAIM_noDiscretionaryBlockingLeversExist() public {
         PolicyERC20 t = _token(_noRules());
 
-        string[5] memory forbidden =
-            ["pause()", "unpause()", "freeze(address)", "blacklist(address)", "setPolicy(address)"];
+        string[7] memory forbidden = [
+            "pause()",
+            "unpause()",
+            "freeze(address)",
+            "blacklist(address)",
+            "setPolicy(address)",
+            "burn(address,uint256)",
+            "burnFrom(address,uint256)"
+        ];
 
         for (uint256 i; i < forbidden.length; ++i) {
             (bool ok,) = address(t).call(abi.encodeWithSignature(forbidden[i]));
@@ -187,7 +200,7 @@ contract PolicyERC20Test is Test {
         e.commitRules();
 
         vm.prank(ALICE);
-        vm.expectRevert(abi.encodeWithSelector(PolicyERC20.PolicyDenied.selector, "sender frozen"));
+        vm.expectRevert(abi.encodeWithSelector(PolicyTokenBase.PolicyDenied.selector, "sender frozen"));
         t.transfer(BOB, 1e18);
     }
 
@@ -229,7 +242,7 @@ contract PolicyERC20Test is Test {
 
         registry.set(BOB, false);
         vm.prank(ALICE);
-        vm.expectRevert(abi.encodeWithSelector(PolicyERC20.PolicyDenied.selector, "recipient not allowlisted"));
+        vm.expectRevert(abi.encodeWithSelector(PolicyTokenBase.PolicyDenied.selector, "recipient not allowlisted"));
         t.transfer(BOB, 1e18);
     }
 
@@ -262,7 +275,7 @@ contract PolicyERC20Test is Test {
         PolicyERC20 t = _token(_one(RuleKind.MaxTransfer, 5e18, address(0)));
 
         vm.prank(ALICE);
-        vm.expectRevert(abi.encodeWithSelector(PolicyERC20.PolicyDenied.selector, "exceeds max transfer"));
+        vm.expectRevert(abi.encodeWithSelector(PolicyTokenBase.PolicyDenied.selector, "exceeds max transfer"));
         t.transfer(BOB, 6e18);
 
         vm.prank(ALICE);
@@ -279,7 +292,7 @@ contract PolicyERC20Test is Test {
         // Exactly at the cap; one more wei must fail. If the token pushed
         // POST-transfer balances the arithmetic here would double-count.
         vm.prank(ALICE);
-        vm.expectRevert(abi.encodeWithSelector(PolicyERC20.PolicyDenied.selector, "exceeds max balance"));
+        vm.expectRevert(abi.encodeWithSelector(PolicyTokenBase.PolicyDenied.selector, "exceeds max balance"));
         t.transfer(BOB, 1);
     }
 
@@ -288,7 +301,7 @@ contract PolicyERC20Test is Test {
         PolicyERC20 t = _token(_one(RuleKind.LockupUntil, until, address(0)));
 
         vm.prank(ALICE);
-        vm.expectRevert(abi.encodeWithSelector(PolicyERC20.PolicyDenied.selector, "locked up"));
+        vm.expectRevert(abi.encodeWithSelector(PolicyTokenBase.PolicyDenied.selector, "locked up"));
         t.transfer(BOB, 1e18);
 
         vm.warp(until);
@@ -306,7 +319,7 @@ contract PolicyERC20Test is Test {
         assertEq(t.holderCount(), 2);
 
         vm.prank(ALICE);
-        vm.expectRevert(abi.encodeWithSelector(PolicyERC20.PolicyDenied.selector, "holder cap reached"));
+        vm.expectRevert(abi.encodeWithSelector(PolicyTokenBase.PolicyDenied.selector, "holder cap reached"));
         t.transfer(CAROL, 1e18);
 
         // Topping up an EXISTING holder is fine — no new holder is created.
@@ -332,7 +345,7 @@ contract PolicyERC20Test is Test {
         t.transfer(BOB, 10e18);
 
         vm.prank(BOB);
-        vm.expectRevert(abi.encodeWithSelector(PolicyERC20.PolicyDenied.selector, "min hold time"));
+        vm.expectRevert(abi.encodeWithSelector(PolicyTokenBase.PolicyDenied.selector, "min hold time"));
         t.transfer(CAROL, 1e18);
 
         vm.warp(block.timestamp + 1 days);
@@ -366,12 +379,12 @@ contract PolicyERC20Test is Test {
 
         // Passes rule 0, fails rule 1.
         vm.prank(ALICE);
-        vm.expectRevert(abi.encodeWithSelector(PolicyERC20.PolicyDenied.selector, "locked up"));
+        vm.expectRevert(abi.encodeWithSelector(PolicyTokenBase.PolicyDenied.selector, "locked up"));
         t.transfer(BOB, 1e18);
 
         // Fails rule 0 first, and says so.
         vm.prank(ALICE);
-        vm.expectRevert(abi.encodeWithSelector(PolicyERC20.PolicyDenied.selector, "exceeds max transfer"));
+        vm.expectRevert(abi.encodeWithSelector(PolicyTokenBase.PolicyDenied.selector, "exceeds max transfer"));
         t.transfer(BOB, 6e18);
     }
 
@@ -492,7 +505,7 @@ contract PolicyERC20Test is Test {
         t.approve(BOB, 100e18);
 
         vm.prank(BOB);
-        vm.expectRevert(abi.encodeWithSelector(PolicyERC20.PolicyDenied.selector, "exceeds max transfer"));
+        vm.expectRevert(abi.encodeWithSelector(PolicyTokenBase.PolicyDenied.selector, "exceeds max transfer"));
         t.transferFrom(ALICE, CAROL, 6e18);
     }
 
@@ -526,19 +539,33 @@ contract PolicyERC20Test is Test {
         assertEq(t.holderCount(), 1);
     }
 
-    function test_mintAndBurnAreIssuerAdminOnly() public {
+    function test_mintIsIssuerAdminOnly() public {
         PolicyERC20 t = _token(_noRules());
 
         vm.prank(ALICE);
         vm.expectRevert(NotIssuerAdmin.selector);
         t.mint(ALICE, 1e18);
 
-        vm.prank(ALICE);
-        vm.expectRevert(NotIssuerAdmin.selector);
-        t.burn(ALICE, 1e18);
-
         vm.prank(ADMIN);
-        t.burn(ALICE, 1_000e18);
+        t.mint(BOB, 1e18);
+        assertEq(t.balanceOf(BOB), 1e18);
+    }
+
+    /// Burn destroys the CALLER'S OWN balance and nothing else. The admin has
+    /// no path to another holder's tokens — see the selector-absence test for
+    /// why confiscation is treated as strictly worse than blocking.
+    function test_CLAIM_burnCannotReachAnotherHoldersBalance() public {
+        PolicyERC20 t = _token(_noRules());
+
+        // The admin holds nothing, so the only burn available to it does nothing.
+        vm.prank(ADMIN);
+        vm.expectRevert(InsufficientBalance.selector);
+        t.burn(1e18);
+        assertEq(t.balanceOf(ALICE), 1_000e18, "admin must not be able to reach Alice");
+
+        // Alice can destroy her own.
+        vm.prank(ALICE);
+        t.burn(1_000e18);
         assertEq(t.totalSupply(), 0);
         assertEq(t.holderCount(), 0);
     }
@@ -555,7 +582,7 @@ contract PolicyERC20Test is Test {
 
         // But transfers are still locked.
         vm.prank(BOB);
-        vm.expectRevert(abi.encodeWithSelector(PolicyERC20.PolicyDenied.selector, "locked up"));
+        vm.expectRevert(abi.encodeWithSelector(PolicyTokenBase.PolicyDenied.selector, "locked up"));
         t.transfer(CAROL, 1);
     }
 }

@@ -3,8 +3,12 @@ pragma solidity ^0.8.34;
 
 import "../interfaces/Types.sol";
 import "../interfaces/Errors.sol";
+import "../interfaces/IPolicyGoverned.sol";
 import "../engine/PolicyEngine.sol";
 import "../engine/PolicyTypes.sol";
+import "./PolicyTokenBase.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
 /**
  * @title PolicyERC20
@@ -28,9 +32,9 @@ import "../engine/PolicyTypes.sol";
  *      decides whether the call reverts. keccak256(type(PolicyERC20).runtimeCode)
  *      identifies this exact code, so a verifier can establish that the
  *      transfer path below is the one that ran. This is why the contract holds
- *      zero immutables and is not abstract, not virtual, and not upgradeable.
+ *      zero immutables and is not virtual and not upgradeable.
  *
- *   2. THE POLICY IS CANONICAL. `_policy` is deployed by THIS contract's
+ *   2. THE POLICY IS CANONICAL. The engine is deployed by this contract's
  *      constructor with CREATE2, from creation code embedded in this bytecode.
  *      There is no setter and no path by which it could be anything else — the
  *      guarantee costs zero gas because it is structural rather than checked.
@@ -40,6 +44,21 @@ import "../engine/PolicyTypes.sol";
  *      policy verdict. Adding any other `revert` to that function falsifies the
  *      headline claim — treat it as a breaking change to the guarantee, not a
  *      feature.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * THE UNCONDITIONAL CASE
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * When the rule array is EMPTY the claim reads: nothing this token can do will
+ * ever block your transfer. That is not a degenerate configuration — it is the
+ * strongest statement the design makes, and no ordinary token can make it.
+ *
+ * A negative claim over arbitrary code ("no hidden condition exists") cannot be
+ * established by observing behaviour, at any cost, ever. It becomes checkable
+ * only because the code is fixed and published: verification moves the question
+ * from runtime to compile time. An empty policy behind a canonical hash is
+ * therefore a machine-checkable proof of ABSENCE — see
+ * PolicyVerification.isUnconditional.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THERE IS NO pause()
@@ -56,65 +75,51 @@ import "../engine/PolicyTypes.sol";
  * market and cannot do it without notice. That is the point, not a limitation.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * MINT AND BURN ARE OUTSIDE THE POLICY
+ * MINT AND BURN
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * Both are onlyIssuerAdmin, unconditionally, so the issuer already has complete
- * control over supply and routing them through the policy would add nothing a
- * holder can rely on. The claim above is scoped to transfers, and says so.
- * Running mint through LockupUntil would also make initial distribution
- * impossible.
+ * `mint` is unconditionally issuer-admin gated and outside the policy. The
+ * issuer already controls supply completely, so routing minting through the
+ * rules would add nothing a holder can rely on, and a LockupUntil rule would
+ * make initial distribution impossible.
+ *
+ * `burn` destroys the caller's own balance and nothing else. It is deliberately
+ * not an admin power: an admin able to burn from an arbitrary address holds a
+ * confiscation lever, which is strictly stronger than the freeze this contract
+ * refuses to implement. Blocking a transfer stops you moving a token; burning
+ * it takes the token outright. A design that rejects `pause()` on principle
+ * cannot accept `burn(address,uint256)`.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * ZERO IMMUTABLES — LOAD-BEARING
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * `_policy`, `_issuerAdmin` and `_deployAdmin` are plain storage written once
- * in the constructor with no setter. POLICY_SALT is `constant`, which inlines
- * into bytecode and — unlike `immutable` — does not break
- * type(PolicyERC20).runtimeCode. Adding one immutable stops the verifier
- * compiling; the constraint enforces itself. See contracts/verification/CanonicalCode.sol.
+ * Every field, here and in PolicyTokenBase, is plain storage written once in a
+ * constructor with no setter. Adding one `immutable` stops the verifier
+ * compiling; the constraint enforces itself. See
+ * contracts/verification/CanonicalCode.sol.
  */
-contract PolicyERC20 {
+contract PolicyERC20 is PolicyTokenBase {
     // =========================================================================
-    //                              ERRORS / EVENTS
+    //                                  EVENTS
     // =========================================================================
-
-    /// @notice The policy denied this transfer, and named the rule that did.
-    error PolicyDenied(string reason);
 
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
-    event IssuerAdminTransferred(address indexed previousAdmin, address indexed newAdmin);
-
-    // =========================================================================
-    //                                CONSTANTS
-    // =========================================================================
-
-    /// @dev `constant`, not `immutable` — inlined into bytecode, so
-    ///      type(PolicyERC20).runtimeCode still compiles.
-    bytes32 private constant POLICY_SALT = keccak256("PolicyERC20.policy.v1");
-
-    uint8 public constant decimals = 18;
 
     // =========================================================================
     //                        STATE — ALL PLAIN STORAGE
     // =========================================================================
 
-    /// @notice The canonical engine holding this token's complete transfer
-    ///         policy. Deployed by this contract's constructor via CREATE2.
-    ///         No setter exists.
-    PolicyEngine private _policy;
-
-    address private _issuerAdmin;
-
-    /// @notice The admin passed to the constructor, recorded once and never
-    ///         changed. Needed to recompute this token's CREATE2 address after
-    ///         an admin handover — see CanonicalCode.isProvenanceVerified.
-    address private _deployAdmin;
-
     string private _name;
     string private _symbol;
+
+    /// @dev Plain storage, not a constant. Real assets are not all 18 decimals
+    ///      (USDC is 6, WBTC is 8) and a canonical set that cannot express that
+    ///      is not usable. `immutable` would break type(C).runtimeCode, so the
+    ///      value is written once in the constructor like everything else.
+    uint8 private _decimals;
+
     uint256 private _totalSupply;
 
     /// @notice Count of addresses holding a non-zero balance. Maintained here
@@ -126,69 +131,27 @@ contract PolicyERC20 {
     mapping(address => mapping(address => uint256)) private _allowances;
 
     // =========================================================================
-    //                                MODIFIERS
-    // =========================================================================
-
-    modifier onlyIssuerAdmin() {
-        if (msg.sender != _issuerAdmin) revert NotIssuerAdmin();
-        _;
-    }
-
-    // =========================================================================
     //                               CONSTRUCTOR
     // =========================================================================
 
-    /// @notice One transaction deploys the token and its policy together. There
-    ///         is no initializer and therefore no window in which this token
-    ///         exists with no policy attached.
-    /// @dev    The engine needs its notifier (this token) and this token needs
-    ///         the engine's address — a cycle at the value level, but not at
-    ///         the TYPE level, which is what matters to the compiler.
-    ///         PolicyEngine imports only PolicyTypes and never names this
-    ///         contract, so the code dependency graph stays acyclic and
-    ///         type(PolicyEngine).creationCode resolves here.
-    /// @param admin      Issuer admin: may mint, burn, and change policy rules.
-    /// @param tokenName  ERC-20 name.
-    /// @param tokenSymbol ERC-20 symbol.
-    /// @param swapDelay  Seconds of public notice before any rule change commits.
-    /// @param initialRules The token's policy at launch. May be empty.
+    /// @param admin         Issuer admin: may mint and change policy rules.
+    /// @param tokenName     ERC-20 name.
+    /// @param tokenSymbol   ERC-20 symbol.
+    /// @param tokenDecimals ERC-20 decimals.
+    /// @param swapDelay     Seconds of notice before a rule change commits.
+    /// @param initialRules  The policy at launch. Empty means unconditional —
+    ///                      see the contract NatSpec.
     constructor(
         address admin,
         string memory tokenName,
         string memory tokenSymbol,
+        uint8 tokenDecimals,
         uint256 swapDelay,
         Rule[] memory initialRules
-    ) {
-        if (admin == address(0)) revert ZeroAddress();
-
-        _issuerAdmin = admin;
-        _deployAdmin = admin;
+    ) PolicyTokenBase(admin, swapDelay, initialRules) {
         _name = tokenName;
         _symbol = tokenSymbol;
-
-        _policy = new PolicyEngine{salt: POLICY_SALT}(admin, address(this), swapDelay, initialRules);
-    }
-
-    // =========================================================================
-    //                        THE INTEGRATOR SURFACE
-    // =========================================================================
-
-    /// @notice The engine holding this token's complete transfer policy.
-    /// @dev    Check its codehash against keccak256(type(PolicyEngine).runtimeCode)
-    ///         before trusting anything it returns, then read rules() off it.
-    ///         Because THIS contract's code is canonical, the getter and the
-    ///         caller in _transfer() read the same setter-less slot.
-    function policy() external view returns (address) {
-        return address(_policy);
-    }
-
-    function tokenStandard() external pure returns (TokenStandard) {
-        return TokenStandard.ERC20;
-    }
-
-    /// @notice Number of addresses holding a non-zero balance.
-    function holderCount() external view returns (uint256) {
-        return _holderCount;
+        _decimals = tokenDecimals;
     }
 
     // =========================================================================
@@ -203,6 +166,10 @@ contract PolicyERC20 {
         return _symbol;
     }
 
+    function decimals() external view returns (uint8) {
+        return _decimals;
+    }
+
     function totalSupply() external view returns (uint256) {
         return _totalSupply;
     }
@@ -215,8 +182,20 @@ contract PolicyERC20 {
         return _allowances[owner][spender];
     }
 
+    /// @inheritdoc IPolicyGoverned
+    function tokenStandard() external pure returns (TokenStandard) {
+        return TokenStandard.ERC20;
+    }
+
+    /// @notice Number of addresses holding a non-zero balance.
+    function holderCount() external view returns (uint256) {
+        return _holderCount;
+    }
+
     /// @notice Whether the policy would currently allow this transfer, and why
     ///         not if it would not. Free to call; changes nothing.
+    /// @dev The integrator's alternative to a failed transaction. A marketplace
+    ///      or wallet can call this before submitting and render the reason.
     function canTransfer(address from, address to, uint256 amount)
         external
         view
@@ -225,6 +204,13 @@ contract PolicyERC20 {
         if (to == address(0)) return (false, "zero recipient");
         if (_balances[from] < amount) return (false, "insufficient balance");
         return _policy.evaluate(_context(from, to, amount));
+    }
+
+    /// @notice ERC-165. Advertises IPolicyGoverned so an integrator can discover
+    ///         the policy without knowing anything else about this token.
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(IERC20).interfaceId || interfaceId == type(IPolicyGoverned).interfaceId
+            || interfaceId == type(IERC165).interfaceId;
     }
 
     // =========================================================================
@@ -341,7 +327,7 @@ contract PolicyERC20 {
     }
 
     // =========================================================================
-    //                        SUPPLY — ISSUER ADMIN ONLY
+    //                                 SUPPLY
     // =========================================================================
 
     /// @notice Mint new supply. Unconditionally issuer-admin gated; see the
@@ -359,40 +345,23 @@ contract PolicyERC20 {
         emit Transfer(address(0), to, amount);
     }
 
-    /// @notice Burn supply from an address. Unconditionally issuer-admin gated.
-    function burn(address from, uint256 amount) external onlyIssuerAdmin {
-        uint256 fromBalance = _balances[from];
+    /// @notice Destroy some of the caller's own balance.
+    /// @dev There is deliberately no admin path to burn someone else's tokens.
+    ///      See the contract NatSpec: confiscation is a strictly stronger power
+    ///      than the freeze this design refuses to implement, so accepting one
+    ///      while rejecting the other would be incoherent. Burning sits outside
+    ///      the policy because it moves nothing to anyone — it cannot be used
+    ///      to escape a lockup, only to give up value.
+    function burn(uint256 amount) external {
+        uint256 fromBalance = _balances[msg.sender];
         if (fromBalance < amount) revert InsufficientBalance();
 
         unchecked {
-            _balances[from] = fromBalance - amount;
+            _balances[msg.sender] = fromBalance - amount;
             _totalSupply -= amount;
         }
         if (amount > 0 && fromBalance == amount) --_holderCount;
 
-        emit Transfer(from, address(0), amount);
-    }
-
-    // =========================================================================
-    //                                  ADMIN
-    // =========================================================================
-
-    function issuerAdmin() external view returns (address) {
-        return _issuerAdmin;
-    }
-
-    /// @notice The admin recorded at deployment. Never changes, even after a
-    ///         handover — needed to recompute this token's CREATE2 address.
-    function deployAdmin() external view returns (address) {
-        return _deployAdmin;
-    }
-
-    /// @dev Moves the token's admin only. The engine holds its own admin, set
-    ///      to the same address at construction; transferring one does not move
-    ///      the other, and a verifier reports both.
-    function transferIssuerAdmin(address newAdmin) external onlyIssuerAdmin {
-        if (newAdmin == address(0)) revert ZeroAddress();
-        emit IssuerAdminTransferred(_issuerAdmin, newAdmin);
-        _issuerAdmin = newAdmin;
+        emit Transfer(msg.sender, address(0), amount);
     }
 }

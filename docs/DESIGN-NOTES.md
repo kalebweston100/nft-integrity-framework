@@ -1,122 +1,84 @@
-# Design notes: what this framework proves, what it doesn't, and where it goes
+# Design notes
 
-Companion to the [README](../README.md). The README documents *how* the
-framework works; this file records *why* it is shaped this way, what the
-central idea is actually worth once scoped honestly, the structural
-limitations that follow from the design, and the roadmap that addresses them.
-
-Written against the state of `refactor/focus-pipeline` (67 tests, pre-audit).
+What this proves, what it doesn't, and why each decision went the way it did.
+The README states the claims; this file argues for them and records the costs.
 
 ---
 
-## 1. The central idea, scoped precisely
+## 1. The idea, scoped precisely
 
-The framework's one novel contribution is in
-[`IntegrityVerifier.sol`](../contracts/libraries/IntegrityVerifier.sol):
-deriving a contract's expected runtime codehash **at compile time**, from
-imported source, via `keccak256(type(IntegrityERC721).runtimeCode)` — which
-compiles only because `IntegrityERC721` and `HooksWrapperERC721` hold zero
-`immutable` state.
+A transfer policy expressed as **data in storage** rather than **code in
+bytecode**, evaluated by a contract whose bytecode is fixed and published.
 
-It is worth being exact about which part of that is new, because two parts of
-it are not.
+Fix the code, vary the storage. That is the entire mechanism, and it is the same
+trick applied twice: the tokens stay byte-identical across issuers because their
+configuration lives in storage, and the engine stays byte-identical across
+policies for exactly the same reason. An engine holding a 90-day lockup and an
+engine holding an allowlist plus a transfer cap compile to the same runtime
+bytes and hash identically.
 
-**Not new: comparing `EXTCODEHASH` against a known-good value.** This is
-routine. EIP-1167 clone detection, CREATE2 address derivation, and Uniswap
-V2's `init_code_hash` all do it.
+### 1.1 What the canonical hash is actually for
 
-**Not new: the trust reduction.** The README's "no published hash to trust"
-overstates the case. A verifier still has to trust that the source it imported
-is the genuine framework source. Importing `IntegrityVerifier.sol` from a repo
-and reading a published hash constant from that same repo bottom out in the
-same supply-chain trust. The anchor is relocated, not eliminated.
+This has been walked back three times and the final position is narrow:
 
-**Actually new, and the part worth keeping: the hash cannot drift from the
-source.** A published constant can go stale — Uniswap V2's hardcoded
-`init_code_hash` is a well-known footgun precisely because forks changed the
-source and forgot to update the constant, and integrators silently computed
-wrong pair addresses. Here that failure mode is structurally impossible: the
-hash is *derived from* the source it describes, in the same compilation.
+> The canonical hash is not what makes a policy trustworthy to **read**.
+> It is what makes `rules()` **exhaustive** — no condition exists outside the
+> array.
 
-**Also new, and the best design decision in the repo: the invariant is
-self-enforcing.** Add a single `immutable` to any verified token or wrapper and
-`IntegrityVerifier.sol` stops compiling, with the compiler naming the reason:
+Verification is *not* the product, and the earlier framing that leaned on it was
+wrong. "This bytecode matches this source" is what Sourcify and Etherscan
+already provide, free, for every contract; a consumer that is already off-chain
+can fetch `eth_getCode` from any RPC. Nothing here improves on that, and
+claiming otherwise would be dishonest.
 
-```
-Error (9274): "runtimeCode" is not available for contracts containing
-              immutable variables.
-```
+What survives is a much smaller point, and it is enough:
 
-The property cannot decay into a convention that nobody checks. CI catches it
-on the commit that breaks it, not in an audit six months later. This is the
-same move the framework makes elsewhere — `CALL` never `DELEGATECALL`,
-non-`virtual` entry points — applied to the verification layer: replace a
-guarantee that depends on reviewer discipline with one the compiler enforces.
+An Etherscan-verified bespoke ERC-3643 compliance module still cannot answer
+*"can this block my transfer, and when?"* without reasoning over every
+control-flow path — a program-analysis problem, undecidable in general, in
+practice a human auditor per token per version. Policy-as-data replaces that
+with an array read. **No explorer touches this.** Exhaustiveness comes from the
+finite rule vocabulary plus a known evaluator, not from the hash's provenance.
 
-That is the contribution. It is a technique, not a new trust model, and it is
-worth roughly what a good technique is worth.
+Two smaller advantages of the on-chain hash are worth keeping as footnotes, not
+as a thesis: explorer verification is opt-in per deployment, so a canonical
+engine matches even when an issuer never verifies on a chain nobody indexes; and
+Etherscan is a company with an API key.
 
-### 1.1 The boundary of a codehash, and how it is closed
+### 1.2 The theorem everything else follows from
 
-A runtime codehash constrains **future behaviour** and nothing else. It cannot
-speak to how current state arose, because the constructor that wrote the
-initial storage lives in the **creation** code, which `EXTCODEHASH` never
-covers.
+> **The contract the user transacts with must have a verifiable codehash.**
 
-Init code and runtime code are independent byte strings — `CREATE` stores
-whatever the init code `RETURN`s. So an attacker can write an arbitrary
-constructor that fabricates storage, then return canonical runtime bytes copied
-off any real deployment (public by design, `EXTCODECOPY`-able on chain). The
-result passes `isCanonicalERC721()` *honestly*: it really does run canonical
-code. `test/CodehashLimits.t.sol` demonstrates this — a contract reporting a
-`totalSupply` no mint ever created, a `hooksContract()` that never deployed it,
-and a byte-identical codehash.
+Whatever address receives the transaction decides whether it reverts. If you
+cannot verify that bytecode, the author can `require` anything, anywhere. And
+this cannot be recovered at runtime, because of an asymmetry:
 
-The rule this yields, and the one to design against:
+> You can prove a transfer **went through** the policy.
+> You can never prove it went **only** through the policy.
 
-> Guarantees about **future behaviour** can ride on a codehash.
-> Guarantees about **history** cannot, and need CREATE2 provenance as well.
+Consultation is a positive, observable fact. "Nothing else blocked" is a
+negative claim over arbitrary code, and no observation establishes it — the
+engine returning `true` followed by the token reverting for its own reasons is
+indistinguishable, from the engine's side, from success.
 
-Run the original claims through that filter and they sort cleanly. Locked entry
-points, `CALL`-not-`DELEGATECALL`, the STATICCALL-enforced `view` on
-`validateTransfer`, and the section 4.1 timelock are all future-tense — they
-survive on a codehash alone. "The wrapper reference is unspoofable" and "supply
-is confined to `onlyIssuerAdmin`" are past-tense, and both failed, for the same
-single reason.
+**Therefore "only these rules can block" and "works with any token" are
+contradictory, not merely hard.** The closed canonical set is not a limitation
+awaiting an adoption story; it is what the strong claim costs.
 
-**The closure.** A CREATE2 address is a commitment to the init code:
+### 1.3 Why the unconditional case is the headline
 
-```
-address = keccak256(0xff ++ deployer ++ salt ++ keccak256(initCode))[12:]
-```
+The theorem above says a negative claim cannot be established *at runtime, for
+arbitrary code*. A canonical codehash does not beat it — it **relocates** the
+question to compile time, for a closed set. The empty policy is the purest
+instance of that move: the entire value is the proven absence.
 
-Each wrapper now deploys its token with `new IntegrityERC721{salt: TOKEN_SALT}`,
-and `isProvenanceVerifiedERC721(token, wrapper)` recomputes that address from
-`type(IntegrityERC721).creationCode` plus the constructor arguments read back
-off the token. The arguments are self-certifying — any lie changes the init-code
-hash, hence the address, hence the result. A match proves the canonical
-constructor actually ran, which restores the past-tense claims in full.
+Nothing else in the ecosystem can state "this token has no transfer
+restrictions" as a checkable fact. And it costs the issuer nothing: with no
+rules the token is an ordinary, fully marketplace-compatible ERC-721.
 
-Three things worth recording about this:
-
-- **No new anchor.** The CREATE2 deployer is the wrapper, already an input to
-  the check. No factory, registry, or singleton is reintroduced, so the
-  anchor-free property of section 1 is preserved.
-- **`constant`, not `immutable`.** `TOKEN_SALT` is a `constant`, which inlines
-  into bytecode and does not break `type(C).runtimeCode`. The self-enforcing
-  zero-immutable constraint is untouched.
-- **A transferable admin needed a permanent record.** `transferIssuerAdmin`
-  moves `issuerAdmin`, so the current value is not the constructor argument.
-  `TokenAdmin._deployAdmin` records the deploy-time admin in its own setter-less
-  slot; without it, an admin handover would silently make a deployment
-  unverifiable.
-
-**Provenance is strictly more powerful than the codehash check.**
-`type(C).creationCode` is available even for contracts holding immutables —
-only `runtimeCode` is restricted — so this technique extends to tokens the
-zero-immutable discipline currently rules out. The two are complementary rather
-than redundant: the codehash is cheap and needs no arguments but speaks only to
-the future; the CREATE2 derivation needs the arguments and proves the history.
+`isUnconditional()` folds in `pendingAt == 0` deliberately. A token with no
+rules but a live proposal is unconditional today and locked next week; a green
+badge on it would be exactly the failure this design exists to prevent.
 
 ---
 
@@ -124,192 +86,162 @@ the future; the CREATE2 derivation needs the arguments and proves the history.
 
 | Prior art | Relationship |
 |---|---|
-| **ERC-1404** | Restriction logic lives *inside* the token. No separate deployment; nothing stops the same function from mutating balances. This framework's separation is a strict improvement. |
-| **ERC-3643 (T-REX)** | The closest serious comparison. Modular compliance, but routed through a trusted `Compliance` contract, and — importantly — **updatable**. Has institutional RWA adoption and a standards body. Beats this framework on adoption and on policy mutability; loses on the calling-convention guarantee. |
+| **ERC-1404** | Restriction logic lives *inside* the token. No separate deployment; nothing stops the same function from mutating balances. The separation here is a strict improvement, but 1404's `detectTransferRestriction` is the direct ancestor of `canTransfer()`. |
+| **ERC-3643 (T-REX)** | The closest serious comparison. Modular compliance, but routed through a trusted `Compliance` contract, and — importantly — **updatable arbitrary code**. Has institutional RWA adoption and a standards body. Beats this on adoption and on policy expressiveness; loses on enumerability, which is the entire point of contention. |
 | **ERC-902** | Standardises external transfer validators. Stagnant. |
 | **ERC-7943 (uRWA)** | Newer, minimal RWA interface. Occupies adjacent design space. |
-| **Uniswap v4 hooks** | The dominant non-EIP prior art for `CALL`-based, separately-deployed extension points. The extension model here is a stricter point on that same spectrum, not a new axis. |
-| **Diamond facets / Safe modules** | Wire extensions in via `DELEGATECALL`, so the extension runs in the host's storage. This is the pattern the framework is a reaction to — but note these are wallet and upgradability products, a different category from transfer-restriction hooks. |
+| **Uniswap v4 hooks** | The dominant non-EIP prior art for `CALL`-based, separately-deployed extension points. Related, but hooks are arbitrary code by design — the opposite trade. |
+| **Diamond facets / Safe modules** | Wire extensions in via `DELEGATECALL`, so the extension runs in the host's storage. The pattern this is a reaction to. |
 
-The extension model — deny-only, separately deployed, `CALL`-invoked — is a
-sound point on an existing spectrum. The verification technique is the part
-without close prior art.
+The novel part is not the separation and not the hashing. It is **replacing an
+arbitrary predicate with a finite, enumerable vocabulary**, and accepting a
+closed token set as the price of the claim that buys.
 
 ---
 
 ## 3. Structural limitations
 
-These follow from the design rather than from incomplete implementation. They
-are the honest cost of the guarantees above.
+These follow from the design, not from incomplete implementation.
 
-### 3.0 Resolved: the constructor was outside the verified perimeter
+### 3.1 The canonical set cannot include OpenZeppelin
 
-Recorded here because the repository shipped with it. A canonical runtime
-codehash said nothing about the constructor that wrote the initial state, so
-fabricated supply and a fabricated wrapper reference both passed verification.
-Closed by the CREATE2 provenance check in section 1.1; the failing case is kept
-as an executable test in `test/CodehashLimits.t.sol` rather than deleted,
-because it documents where the boundary sits.
+An issuer cannot bring their own ERC-721. This is unfixable — see §1.2 — and it
+is the single largest adoption cost. The reframing that makes it workable is
+that the curated set must cover **the features people will not give up**, which
+is a finishable target with a clear definition of done.
 
-### 3.1 The verified perimeter excludes everything that carries risk
+The distinction for deciding what may join the set: `permit` adds an
+**authorization** path, not a **blocking condition**, so it costs the claim
+nothing and belongs. `Pausable` hooks and role-gated transfer guards add
+discretionary reverts, and are exactly what the policy replaces.
 
-The token and the wrapper get a universal hash — and they contain no policy.
-`logic`, which contains *all* the policy, is deliberately not coverable by any
-universal hash: it carries per-developer state and immutables by design.
+### 3.2 The timelock does not cover registry membership
 
-So verification proves the plumbing and never the behaviour. A canonical token
-behind a canonical wrapper can still deny every transfer, or allow exactly the
-ones a hostile issuer wants. This is stated in the README, but its weight
-deserves emphasis: the headline feature verifies the part of the system that
-was never where the risk lived.
+Four of ten rule kinds consult a registry whose contents the timelock does not
+govern. "The policy cannot change without notice" is therefore **false** in the
+common case. The precise honest claim:
 
-### 3.2 Immutable `logic` fights the primary use case
+> The timelock covers which conditions exist, not who they apply to.
 
-`HooksWrapperERC721` captures `logic = msg.sender` in its constructor with no
-setter. Policy is therefore fixed for the life of the deployment.
+Not fully fixable: sanctions compliance *requires* immediate blocking, so a
+notice period on membership would make the rules unusable for the market that
+most wants them. `externalRefs()` reports every consulted address of any rule
+kind, so an integrator can at least see the whole dependency surface rather than
+only the `ExternalGate` ones.
 
-The natural market for deny-only transfer hooks is compliance and RWA — a
-domain where rules change constantly: new sanctioned jurisdictions, revised
-accreditation thresholds, changed holding periods. ERC-3643 supports updatable
-compliance for exactly this reason. Under the current design, a rule change
-means redeploying the entire stack and migrating holders, or having the logic
-contract hold its own updatable pointer to a sub-policy — at which point the
-mutable, unverified component holds all the risk and the wrapper hash covers
-none of it.
+### 3.3 A codehash cannot speak to history
 
-This is the sharpest tension in the design. Section 4.1 proposes a resolution
-that strengthens the verification claim rather than trading it away.
+Demonstrated in `test/CodehashLimits.t.sol`: init code and runtime code are
+independent byte strings, so an impostor can fabricate arbitrary storage and
+return canonical runtime bytes copied off a real deployment. It passes the full
+report.
 
-### 3.3 On-chain consumers are, so far, hypothetical
+This is *not* a hole in the headline claim, and the test suite says so
+explicitly. Every claim the report makes is future-tense and holds for the
+impostor too — it genuinely runs canonical code. What no codehash can establish
+is how the balances arose. CREATE2 provenance closes precisely that gap;
+`CanonicalCode.sol` carries the primitive and `PolicyVerification` deliberately
+does not call it, because no claim made here is about history.
 
-`IntegrityVerifier` is an `internal` library intended to compile into a
-consumer such as a marketplace. Two frictions:
+One residual detail worth knowing: an impostor pointing at somebody else's
+engine is *inert*, because `recordTransfer` is notifier-gated and the transfer
+path calls it unconditionally. The cheap forgery fails closed; a working one has
+to stand up its own engine and therefore its own honest, readable policy.
 
-- Established marketplaces (Seaport, Blur) will not add per-framework codehash
-  checks. There is no incentive.
-- Any integrator must compile with byte-identical settings — solc `0.8.34`
-  exactly, `viaIR = true`, optimizer 200 runs, `cancun`, `cbor_metadata =
-  false`. That is real coordination cost for a check whose off-chain
-  equivalent (Sourcify, Etherscan verification) already exists and is free.
+### 3.4 On-chain consumers are hypothetical
 
-Worth noting that the **pairing checks** (`isConsistentPair`,
-`isConsistentLogicPair`) carry none of this friction — they need no hash and no
-compiler-settings agreement, work against any deployment, and are cheap. They
-are currently undersold relative to the bytecode-hash story and are probably
-the more adoptable primitive of the two.
+`PolicyVerification` is a library nothing on-chain currently calls. The
+realistic consumer is off-chain — a wallet, a marketplace, an explorer — and
+none exists yet. Until one does, enumerability is a property nobody is reading.
+This is the gap most worth closing next, and it is a UI problem rather than a
+contract problem.
 
-### 3.4 Adoption currently requires abandoning the existing token stack
+### 3.5 Gas
 
-Conformance means inheriting `HooksLogicERC20/721/1155` and taking
-`IntegrityERC20/721/1155` with it. An issuer therefore gives up OpenZeppelin,
-ERC721A's batch-mint gas profile, `permit`/EIP-712, enumerable extensions,
-per-token royalty, and role-based admin (there is a single `issuerAdmin`), with
-no upgrade path.
-
-That is a very high switching cost for a guarantee about the hooks layer. It is
-what makes this a framework rather than a standard, and it is the single
-largest barrier to anyone using it. See section 4.2.
-
-### 3.5 Minor: unbounded revert-reason returndata
-
-The token copies an untrusted `string memory reason` out of the logic contract
-on every gated call — e.g.
-[`IntegrityERC721.sol`](../contracts/token/IntegrityERC721.sol) in
-`_transferPipeline721` — with no bound on returndata size. A hostile logic
-contract could grief gas by returning a very large string. The griefing is
-self-inflicted (the issuer chooses the logic contract), so this is a nit rather
-than a finding, but a returndata bound would be cheap and is worth adding.
+`evaluate()` is a linear scan, so cost grows with rule count. The ERC-1155 batch
+path consults the policy once per item rather than once per call — the honest
+price of a batch meaning exactly what the transfers it bundles mean. `Rule` is
+unpacked for legibility and could pack `kind`, `scoped` and a narrowed `value`
+into fewer slots.
 
 ---
 
-## 4. Where this goes
+## 4. Decisions worth not re-litigating
 
-Two changes, in this order. The first is the interesting one.
+Each of these was argued and settled; several reverse an earlier position.
 
-### 4.1 Timelocked logic swaps, enforced in canonical bytecode
+**Inheriting the engine into tokens: fatal.** It destroys the thesis three ways
+— no canonical hash (every issuer's token compiles differently, back to
+bespoke), no exhaustiveness (the author adds a `require` in their own path), and
+storage collision. Inheritance and canonical-hash verification are mutually
+exclusive *at the leaf*. A shared abstract base among the members of the set is
+fine, because a non-member that inherits it simply matches no published hash.
 
-The obvious fix for 3.2 — add `setLogic()` — would delete most of the value of
-section 1. Today, "this wrapper is canonical" implies "the policy behind it is
-the policy that was there at deployment." With a plain setter, a canonical
-wrapper proves almost nothing: an issuer verifies clean, and swaps in hostile
-policy afterwards.
+**A tier-2 "bring your own token" adapter: not the adoption path.** It silently
+weakens the claim to "the policy is enumerable" without "nothing else blocks",
+which is the half that matters. It must never be documented as an extension
+point.
 
-The version that is not a trade-off: **make `setLogic` two-phase, with the
-delay as a compile-time constant in the wrapper.** Propose, emit an event, wait
-`LOGIC_SWAP_DELAY`, commit. Because the wrapper remains canonical, un-inherited
-and immutable-free, its codehash then carries a strictly stronger claim:
+**The wrapper/logic layers: deleted.** They existed to be canonical while an
+author's `logic` contract was bespoke. A closed set has no bespoke logic, so the
+premise dissolved and the chain collapsed from four contracts to two. Worse than
+redundant, they were contradictory: a hooks-based deployment falsifies the
+headline claim, so shipping both published an extension point implicitly.
 
-> Verifying this wrapper's codehash proves that the policy governing this token
-> cannot change without `N` days of public, on-chain notice.
+**A STATICCALL pull model: obsolete.** Proposed to reach third-party tokens;
+the closed set removes the reason. The one insight worth keeping is that
+`evaluate` being `view` means the whole subcall frame is already
+STATICCALL-enforced to arbitrary depth — so "nothing can write back" was never
+the pull model's contribution.
 
-No registry, no admin key, and no off-chain promise can offer that, and a
-stranger can check it with one `EXTCODEHASH`. It is the same move the framework
-already makes twice: convert a property that would normally be a documented
-convention into one that is enforced by bytecode.
+**`initialize`-once instead of constructor binding: rejected.** Once the token
+is canonical, a one-shot setter buys nothing the constructor doesn't, and costs
+a window in which the token exists with no policy. If the token is *not*
+canonical the `initialized` guard proves nothing anyway — it only works when you
+already have what makes it unnecessary.
 
-Implementation sketch:
+**No proxies, ever.** A canonical proxy in front of a mutable implementation
+verifies clean and means nothing. Not present today; the point is to keep it
+out.
 
-- `pendingLogic` / `pendingLogicAt` as plain storage, no immutables (the
-  section 1 constraint continues to hold, and continues to enforce itself).
-- `proposeLogic(address)` and `commitLogic()`, both `onlyLogic` or
-  `onlyIssuerAdmin` — the authorisation model needs a decision, since today the
-  wrapper has no admin of its own.
-- `LogicProposed(address indexed newLogic, uint256 effectiveAt)` so the notice
-  is indexable off-chain without polling.
-- `LOGIC_SWAP_DELAY` as a `constant` — note that `constant` is inlined into
-  bytecode and, unlike `immutable`, does **not** break `type(C).runtimeCode`.
-  A different delay is a genuinely different wrapper with a different hash,
-  which is the correct semantics: an integrator choosing to accept a 1-day
-  wrapper and a 30-day wrapper is making two different risk decisions and
-  should have to opt into each explicitly.
-- Tests: the existing `Verification.t.sol` pattern extends directly — assert
-  the codehash is unchanged across deployments that have swapped logic, and
-  that a swap cannot commit early.
-
-### 4.2 Implementation independence
-
-The concrete gate for 3.4, already named in the README's "What's not there
-yet." The target: a canonical `HooksWrapperERC721` that can govern an
-OpenZeppelin, ERC721A, or Solady token rather than requiring `IntegrityERC721`.
-
-This is a larger refactor than anything on this branch, because the current
-guarantees lean on properties of the bundled token — non-`virtual` entry
-points, the setter-less `msg.sender`-derived wrapper reference,
-`onlyIssuerAdmin` mint and burn. A third-party token provides none of them, so
-the honest version of this work is to determine *which* guarantees survive the
-separation and document the reduced claim, rather than to assert the full claim
-over tokens that cannot support it.
-
-The gate remains a conformance test suite that passes against someone else's
-ERC-721 wired through the wrapper pattern. Until that exists, this is a
-framework, not a standard.
-
-### 4.3 Smaller items
-
-- Invariant and fuzz tests: `sum(balances) == totalSupply`, no-op
-  self-transfers, pause gating on every entry point. The current 67-test suite
-  is broad but example-based.
-- Bound revert-reason returndata (3.5).
-- Surface the pairing checks (3.3) more prominently — they are the primitive
-  most likely to be adopted.
-- Packaging: a documented `forge install` flow and versioned releases.
-- Security disclosure policy; external audit.
+**Generalising beyond ERC tokens: a trap.** Enumerability depends on a narrow
+decision surface. A universal "any action on any contract" policy degrades back
+into code. ERC-4337 validators are the one adjacent domain worth a second
+instance later.
 
 ---
 
-## 5. Summary
+## 5. Two bugs that recur, recorded so they stop recurring
 
-The framework's contribution is a verification technique — compile-time hash
-derivation made possible and kept honest by a self-enforcing zero-immutable
-constraint — demonstrated inside a strictly one-directional, deny-only token
-pipeline. The technique is sound, tested, and the property it guarantees cannot
-silently rot.
+**Balance inflation on self-transfer.** Caching both balances before writing
+means, when `from == to`, the credit overwrites the debit and the transfer mints
+from nothing. Found in `IntegrityERC721` during a review, then written again in
+`PolicyERC20._moveBalance` and caught by a new test. It looks like an
+optimisation, which is why it keeps getting written. Every `_move*` function now
+opens with an early return and a comment saying why.
 
-Its limits are equally clear. Verification covers the plumbing rather than the
-policy; fixed `logic` sits badly with the compliance use case that most wants
-this shape of extension; and requiring the bundled token puts the switching
-cost above what the guarantee currently justifies.
+**Auditing for blocking levers but not confiscation ones.** The selector-absence
+test originally asserted `pause`, `freeze` and `blacklist` were absent while
+`burn(address,uint256)` sat in the contract — an admin able to zero any holder's
+balance. Blocking stops you moving a token; burning takes it. A design that
+rejects `pause()` on principle cannot accept admin burn, and the test now covers
+both categories.
 
-Section 4.1 is the change that makes the central idea prove something a
-competing design cannot, and section 4.2 is the change that makes the framework
-installable at all. In that order.
+---
+
+## 6. Where this goes
+
+**Next: an off-chain reader.** Paste a token address, render its policy. The
+value of enumerability is only realised once something reads it, and this is a
+UI problem rather than a contract problem — see §3.4.
+
+**After that: standardise the vocabulary, not the implementation.** If `RuleKind`
+and `Rule` became an ERC, a wallet would write one reader and every conforming
+token would benefit regardless of whose engine they deployed — a primitive
+others build on rather than a framework others adopt. That reframes what needs
+scrutiny: the ten rule kinds in `PolicyTypes.sol` are the part that must survive
+contact with real issuers, and they deserve far more adversarial review than
+they have had.
+
+**Not next:** more rule kinds, more token variants, or anything that widens the
+surface before something reads the surface that exists.
