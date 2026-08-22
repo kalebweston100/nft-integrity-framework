@@ -56,6 +56,68 @@ guarantee that depends on reviewer discipline with one the compiler enforces.
 That is the contribution. It is a technique, not a new trust model, and it is
 worth roughly what a good technique is worth.
 
+### 1.1 The boundary of a codehash, and how it is closed
+
+A runtime codehash constrains **future behaviour** and nothing else. It cannot
+speak to how current state arose, because the constructor that wrote the
+initial storage lives in the **creation** code, which `EXTCODEHASH` never
+covers.
+
+Init code and runtime code are independent byte strings — `CREATE` stores
+whatever the init code `RETURN`s. So an attacker can write an arbitrary
+constructor that fabricates storage, then return canonical runtime bytes copied
+off any real deployment (public by design, `EXTCODECOPY`-able on chain). The
+result passes `isCanonicalERC721()` *honestly*: it really does run canonical
+code. `test/CodehashLimits.t.sol` demonstrates this — a contract reporting a
+`totalSupply` no mint ever created, a `hooksContract()` that never deployed it,
+and a byte-identical codehash.
+
+The rule this yields, and the one to design against:
+
+> Guarantees about **future behaviour** can ride on a codehash.
+> Guarantees about **history** cannot, and need CREATE2 provenance as well.
+
+Run the original claims through that filter and they sort cleanly. Locked entry
+points, `CALL`-not-`DELEGATECALL`, the STATICCALL-enforced `view` on
+`validateTransfer`, and the section 4.1 timelock are all future-tense — they
+survive on a codehash alone. "The wrapper reference is unspoofable" and "supply
+is confined to `onlyIssuerAdmin`" are past-tense, and both failed, for the same
+single reason.
+
+**The closure.** A CREATE2 address is a commitment to the init code:
+
+```
+address = keccak256(0xff ++ deployer ++ salt ++ keccak256(initCode))[12:]
+```
+
+Each wrapper now deploys its token with `new IntegrityERC721{salt: TOKEN_SALT}`,
+and `isProvenanceVerifiedERC721(token, wrapper)` recomputes that address from
+`type(IntegrityERC721).creationCode` plus the constructor arguments read back
+off the token. The arguments are self-certifying — any lie changes the init-code
+hash, hence the address, hence the result. A match proves the canonical
+constructor actually ran, which restores the past-tense claims in full.
+
+Three things worth recording about this:
+
+- **No new anchor.** The CREATE2 deployer is the wrapper, already an input to
+  the check. No factory, registry, or singleton is reintroduced, so the
+  anchor-free property of section 1 is preserved.
+- **`constant`, not `immutable`.** `TOKEN_SALT` is a `constant`, which inlines
+  into bytecode and does not break `type(C).runtimeCode`. The self-enforcing
+  zero-immutable constraint is untouched.
+- **A transferable admin needed a permanent record.** `transferIssuerAdmin`
+  moves `issuerAdmin`, so the current value is not the constructor argument.
+  `TokenAdmin._deployAdmin` records the deploy-time admin in its own setter-less
+  slot; without it, an admin handover would silently make a deployment
+  unverifiable.
+
+**Provenance is strictly more powerful than the codehash check.**
+`type(C).creationCode` is available even for contracts holding immutables —
+only `runtimeCode` is restricted — so this technique extends to tokens the
+zero-immutable discipline currently rules out. The two are complementary rather
+than redundant: the codehash is cheap and needs no arguments but speaks only to
+the future; the CREATE2 derivation needs the arguments and proves the history.
+
 ---
 
 ## 2. Prior art, honestly
@@ -79,6 +141,15 @@ without close prior art.
 
 These follow from the design rather than from incomplete implementation. They
 are the honest cost of the guarantees above.
+
+### 3.0 Resolved: the constructor was outside the verified perimeter
+
+Recorded here because the repository shipped with it. A canonical runtime
+codehash said nothing about the constructor that wrote the initial state, so
+fabricated supply and a fabricated wrapper reference both passed verification.
+Closed by the CREATE2 provenance check in section 1.1; the failing case is kept
+as an executable test in `test/CodehashLimits.t.sol` rather than deleted,
+because it documents where the boundary sits.
 
 ### 3.1 The verified perimeter excludes everything that carries risk
 

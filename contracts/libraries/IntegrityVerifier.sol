@@ -43,14 +43,30 @@ import "../hooks/HooksWrapperERC1155.sol";
  * compiling. The invariant can't silently rot into an unchecked convention.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * WHAT VERIFYING THE TOKEN ALONE PROVES
+ * WHAT A CODEHASH PROVES — FUTURE BEHAVIOUR, NEVER HISTORY
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * That the token runs exactly this repository's pipeline — locked entry
- * points, CALL-only invocation of its wrapper, setter-less wrapper reference —
- * and that mint/burn can only be triggered by the issuer admin. No hook can
- * ever call back into the token, so a canonical token's supply is provably
- * confined to `onlyIssuerAdmin`, regardless of what governs it.
+ * A canonical codehash proves the token runs exactly this repository's
+ * pipeline — locked entry points, CALL-only invocation of its wrapper — and
+ * therefore that EVERY STATE TRANSITION FROM NOW ON obeys those rules. No hook
+ * can call back into the token, and mint/burn are unconditionally
+ * `onlyIssuerAdmin`.
+ *
+ * It proves NOTHING about the state you are looking at when you check. The
+ * constructor that wrote the initial storage lives in the CREATION code, which
+ * EXTCODEHASH never covers — so a canonical codehash is compatible with a
+ * fabricated starting balance, a fabricated supply, and a `hooksContract()`
+ * that never deployed the token. See test/CodehashLimits.t.sol, which
+ * demonstrates precisely this, and the PROVENANCE section below, which closes
+ * it.
+ *
+ * The rule this yields, and the one to design against:
+ *
+ *     Guarantees about FUTURE behaviour can ride on a codehash.
+ *     Guarantees about HISTORY need CREATE2 provenance as well.
+ *
+ * "Supply is confined to onlyIssuerAdmin" is a claim about history. It holds
+ * only when isProvenanceVerified*() holds too — use isFullyVerified*().
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHAT VERIFYING THE WRAPPER ADDS
@@ -220,6 +236,129 @@ library IntegrityVerifier {
 
     function isCanonicalWrapperERC1155(address target) internal view returns (bool) {
         return isCanonical(target, canonicalWrapperERC1155Hash());
+    }
+
+    // =========================================================================
+    //                     PROVENANCE (CREATE2) CHECKS
+    // =========================================================================
+    //
+    // WHY THESE EXIST — THE LIMIT OF EXTCODEHASH
+    //
+    // A runtime codehash constrains FUTURE behaviour and nothing else. It
+    // cannot speak to how a contract's current state arose, because the code
+    // that wrote the initial state — the constructor — lives in the CREATION
+    // code and is never covered by EXTCODEHASH.
+    //
+    // Init code and runtime code are independent byte strings: CREATE stores
+    // whatever the init code RETURNs. So an attacker can write an arbitrary
+    // constructor that fabricates storage and then returns canonical runtime
+    // bytes copied off any real deployment (they are public, by design). The
+    // result passes isCanonicalERC721() honestly — it really does run
+    // canonical code — while reporting a totalSupply no mint ever created and
+    // a `hooksContract()` that never deployed it. test/CodehashLimits.t.sol
+    // demonstrates exactly this.
+    //
+    // CREATE2 closes the gap, because its address is a commitment to the INIT
+    // code:
+    //
+    //     address = keccak256(0xff ++ deployer ++ salt ++ keccak256(initCode))[12:]
+    //
+    // Recomputing that address proves the canonical constructor actually ran:
+    // storage started empty and `_hooks` genuinely came from `msg.sender`.
+    // Combined with a canonical runtime codehash — which proves every
+    // subsequent transition is canonical — the full statement is recovered:
+    //
+    //     supply started at zero and can only have grown via onlyIssuerAdmin.
+    //
+    // The constructor arguments are read back off the token, which cannot lie
+    // about them: any different value yields a different initCode hash, hence
+    // a different address, hence a mismatch. They are self-certifying.
+    //
+    // No new trust anchor is introduced. The CREATE2 deployer is the wrapper,
+    // which is already an input to the check — there is no factory, registry,
+    // or singleton involved.
+    //
+    // NOTE: `type(C).creationCode` is available even for contracts holding
+    // immutables — only `runtimeCode` is restricted — so this check is
+    // strictly more powerful than the codehash comparison, and would extend to
+    // tokens the zero-immutable discipline currently rules out.
+
+    /// @dev Salt used by HooksWrapperERC20/721/1155 when deploying their token.
+    ///      Must stay in sync with TOKEN_SALT on those contracts.
+    bytes32 internal constant TOKEN_SALT = keccak256("IntegrityToken.v1");
+
+    function _create2Address(address deployer, bytes32 salt, bytes32 initCodeHash) private pure returns (address) {
+        return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), deployer, salt, initCodeHash)))));
+    }
+
+    /// @notice Proves `token` was deployed by `wrapper` running the canonical
+    ///         IntegrityERC20 constructor — so its initial state is canonical.
+    /// @dev    CALLS INTO `token`. Only sound once the codehash is known
+    ///         canonical; prefer isFullyVerifiedERC20, which orders the two
+    ///         checks correctly and short-circuits.
+    function isProvenanceVerifiedERC20(address token, address wrapper) internal view returns (bool) {
+        if (token == address(0) || wrapper == address(0)) return false;
+        IntegrityERC20 t = IntegrityERC20(token);
+        bytes32 initCodeHash = keccak256(
+            abi.encodePacked(
+                type(IntegrityERC20).creationCode, abi.encode(t.deployAdmin(), t.name(), t.symbol(), t.contractURI())
+            )
+        );
+        return token == _create2Address(wrapper, TOKEN_SALT, initCodeHash);
+    }
+
+    /// @notice Proves `token` was deployed by `wrapper` running the canonical
+    ///         IntegrityERC721 constructor — so its initial state is canonical.
+    /// @dev    See isProvenanceVerifiedERC20 for the calling caveat.
+    function isProvenanceVerifiedERC721(address token, address wrapper) internal view returns (bool) {
+        if (token == address(0) || wrapper == address(0)) return false;
+        IntegrityERC721 t = IntegrityERC721(token);
+        bytes32 initCodeHash = keccak256(
+            abi.encodePacked(
+                type(IntegrityERC721).creationCode,
+                abi.encode(t.deployAdmin(), t.name(), t.symbol(), t.contractURI(), t.baseURI())
+            )
+        );
+        return token == _create2Address(wrapper, TOKEN_SALT, initCodeHash);
+    }
+
+    /// @notice Proves `token` was deployed by `wrapper` running the canonical
+    ///         IntegrityERC1155 constructor — so its initial state is canonical.
+    /// @dev    See isProvenanceVerifiedERC20 for the calling caveat.
+    function isProvenanceVerifiedERC1155(address token, address wrapper) internal view returns (bool) {
+        if (token == address(0) || wrapper == address(0)) return false;
+        IntegrityERC1155 t = IntegrityERC1155(token);
+        bytes32 initCodeHash = keccak256(
+            abi.encodePacked(
+                type(IntegrityERC1155).creationCode, abi.encode(t.deployAdmin(), t.uri(0), t.contractURI())
+            )
+        );
+        return token == _create2Address(wrapper, TOKEN_SALT, initCodeHash);
+    }
+
+    // =========================================================================
+    //                     FULL VERIFICATION (code + provenance)
+    // =========================================================================
+    //
+    // The complete claim, and the one integrators should use. Ordering
+    // matters: isCanonical* reads EXTCODEHASH without calling the target, so a
+    // hostile address is rejected before any of its code is invoked. Only once
+    // the codehash is confirmed canonical are the provenance getters called —
+    // at which point they are guaranteed to exist and behave.
+
+    function isFullyVerifiedERC20(address token, address wrapper) internal view returns (bool) {
+        return isCanonicalERC20(token) && isCanonicalWrapperERC20(wrapper) && isProvenanceVerifiedERC20(token, wrapper);
+    }
+
+    function isFullyVerifiedERC721(address token, address wrapper) internal view returns (bool) {
+        return
+            isCanonicalERC721(token) && isCanonicalWrapperERC721(wrapper) && isProvenanceVerifiedERC721(token, wrapper);
+    }
+
+    function isFullyVerifiedERC1155(address token, address wrapper) internal view returns (bool) {
+        return
+            isCanonicalERC1155(token) && isCanonicalWrapperERC1155(wrapper)
+                && isProvenanceVerifiedERC1155(token, wrapper);
     }
 
     // =========================================================================

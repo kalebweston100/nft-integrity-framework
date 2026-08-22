@@ -197,28 +197,64 @@ Two mutual-reference checks, the identical pattern applied at each hop of the
 chain:
 
 - `IntegrityVerifier.isConsistentPair(token, wrapper)` — `token → wrapper` is
-  **unspoofable** (written once, from `msg.sender`, no setter); `wrapper →
+  **hard to spoof** (written once, from `msg.sender`, no setter); `wrapper →
   token` is **author-controlled** (any contract can declare a `token` address
   pointing at someone else's legitimate token).
 - `IntegrityVerifier.isConsistentLogicPair(wrapper, logic)` — same asymmetry,
-  one layer further out: `wrapper → logic` is unspoofable, `logic → wrapper` is
-  author-controlled.
+  one layer further out.
 
-Checking the round trip closes the spoofable direction using the unspoofable
+Checking the round trip closes the author-controlled direction using the other
 one: a fake wrapper can claim to govern a real token, but that token won't name
-it back; a fake logic contract can claim a real wrapper, but that wrapper only
-names whoever actually deployed it. Requires no hash and no compiler-settings
-agreement, so both are worth running even where bytecode comparison is
-impractical.
+it back. Requires no hash and no compiler-settings agreement, so both are worth
+running even where bytecode comparison is impractical.
+
+**These are heuristics, not proofs.** "Written once from `msg.sender`" is a
+property of the *runtime* code; the slot is actually written by the
+constructor, which no codehash covers, so an attacker who fabricates both
+halves of the chain satisfies the round trip. Only
+`isProvenanceVerified*`/`isFullyVerified*` settle it. Treat a passing pairing
+check as evidence, and a failing one as disqualifying.
 
 ### What this proves, and what it doesn't
 
-**Verifying the token alone proves:** the token runs exactly the pipeline in
-this repository — locked entry points, `CALL`-only invocation of its wrapper,
-setter-less wrapper reference — and that mint/burn can only ever be triggered
-by the issuer admin. There is no hook-initiated write path anywhere in this
-framework, so a canonical token's supply is provably confined to
-`onlyIssuerAdmin`, regardless of what governs it.
+**Verifying the token's codehash proves:** the token runs exactly the pipeline
+in this repository — locked entry points, `CALL`-only invocation of its wrapper
+— and therefore that *every state transition from now on* obeys those rules.
+There is no hook-initiated write path anywhere in this framework.
+
+It proves nothing about the state you see when you check. The constructor that
+wrote the initial storage lives in the **creation** code, which `EXTCODEHASH`
+never covers, so a canonical codehash is compatible with a fabricated supply
+and a `hooksContract()` that never deployed the token —
+`test/CodehashLimits.t.sol` demonstrates exactly that. Which gives the rule
+worth designing against:
+
+> Guarantees about **future behaviour** can ride on a codehash.
+> Guarantees about **history** need CREATE2 provenance as well.
+
+**Verifying provenance adds the history.** Each wrapper deploys its token with
+`CREATE2` under a fixed salt, and a CREATE2 address is a commitment to the
+*init* code:
+
+```
+address = keccak256(0xff ++ deployer ++ salt ++ keccak256(initCode))[12:]
+```
+
+`IntegrityVerifier.isProvenanceVerifiedERC721(token, wrapper)` recomputes it
+from `type(IntegrityERC721).creationCode` — again derived at compile time — and
+the constructor arguments read back off the token. Those arguments are
+self-certifying: any lie changes the init-code hash, hence the address, hence
+the result. A match proves the canonical constructor actually ran, so storage
+started empty and the wrapper reference genuinely came from `msg.sender`.
+
+Together they restore the full claim: **supply started at zero and can only
+have grown through `onlyIssuerAdmin` mints.** Use
+`isFullyVerifiedERC20/721/1155(token, wrapper)`, which orders the checks so
+that `EXTCODEHASH` (which never calls the target) rejects a hostile address
+before any of its code runs.
+
+No new anchor is introduced — the CREATE2 deployer is the wrapper, already an
+input to the check. There is still no factory, registry, or singleton.
 
 **Verifying the wrapper adds:** proof that the address governing the token
 actually honours the deny-only calling convention — that it forwards every
@@ -273,6 +309,7 @@ the `canonical*Hash()` helpers rather than pasting literals.
 | Full overridable hook surface (deny gates + notifications) | ✅ | ✅ | ✅ |
 | `IHooksERC*` conformance + ERC-165 discovery (on the wrapper) | ✅ | ✅ | ✅ |
 | Compile-time canonical hash + pairing checks (Token↔Wrapper, Wrapper↔Logic) | ✅ | ✅ | ✅ |
+| CREATE2 provenance — proves the canonical constructor ran (`isFullyVerified*`) | ✅ | ✅ | ✅ |
 | Pause / issuer admin transfer | ✅ | ✅ | ✅ |
 | ERC-2981 royalty info | — | ✅ | ✅ |
 | Example logic contracts (`contracts/test/`) | ✅ | ✅ | ✅ |

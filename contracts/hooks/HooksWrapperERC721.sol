@@ -25,6 +25,13 @@ contract HooksWrapperERC721 is IHooksERC721, ERC165 {
     ///         construction (unspoofable). Plain storage, no setter.
     address public logic;
 
+    /// @notice Salt for the CREATE2 deployment of `token`, making the token's
+    ///         address a commitment to its init code — constructor included.
+    /// @dev    A `constant` is inlined into bytecode and, unlike `immutable`,
+    ///         does NOT break `type(C).runtimeCode`, so the zero-immutable
+    ///         property that makes this wrapper hash-verifiable is unaffected.
+    bytes32 internal constant TOKEN_SALT = keccak256("IntegrityToken.v1");
+
     modifier onlyToken() {
         require(msg.sender == address(token), "Wrapper: Not token contract");
         _;
@@ -38,7 +45,7 @@ contract HooksWrapperERC721 is IHooksERC721, ERC165 {
         string memory baseURI_
     ) {
         logic = msg.sender;
-        token = new IntegrityERC721(issuerAdmin_, tokenName, tokenSymbol, contractURI_, baseURI_);
+        token = new IntegrityERC721{salt: TOKEN_SALT}(issuerAdmin_, tokenName, tokenSymbol, contractURI_, baseURI_);
     }
 
     function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {

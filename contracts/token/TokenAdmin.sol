@@ -29,6 +29,15 @@ abstract contract TokenAdmin {
     /// @notice Whether the token is currently paused.
     bool private _paused;
 
+    /// @notice The issuer admin supplied to the constructor, recorded once and
+    ///         never changed — `transferIssuerAdmin` moves `_issuerAdmin` but
+    ///         never this. Plain storage, no setter.
+    /// @dev    Exists so a verifier can reconstruct the token's original
+    ///         constructor arguments and recompute its CREATE2 address; without
+    ///         it, an admin transfer would make the deployment unverifiable.
+    ///         See IntegrityVerifier.isProvenanceVerified*.
+    address private _deployAdmin;
+
     // =========================================================================
     //                             MODIFIERS
     // =========================================================================
@@ -50,6 +59,7 @@ abstract contract TokenAdmin {
     /// @param admin The initial issuer admin address (typically msg.sender from child).
     constructor(address admin) {
         _issuerAdmin = admin;
+        _deployAdmin = admin;
     }
 
     // =========================================================================
@@ -90,6 +100,13 @@ abstract contract TokenAdmin {
     /// @notice Returns the current issuer admin address.
     function issuerAdmin() external view returns (address) {
         return _issuerAdmin;
+    }
+
+    /// @notice The issuer admin recorded at deployment. Never changes, even
+    ///         after `transferIssuerAdmin`. Needed to recompute this token's
+    ///         CREATE2 address — see IntegrityVerifier.isProvenanceVerified*.
+    function deployAdmin() external view returns (address) {
+        return _deployAdmin;
     }
 
     /// @dev Internal accessor for child contracts that need the admin address.

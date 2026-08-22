@@ -29,6 +29,13 @@ contract HooksWrapperERC20 is IHooksERC20, ERC165 {
     ///         construction (unspoofable). Plain storage, no setter.
     address public logic;
 
+    /// @notice Salt for the CREATE2 deployment of `token`, making the token's
+    ///         address a commitment to its init code — constructor included.
+    /// @dev    A `constant` is inlined into bytecode and, unlike `immutable`,
+    ///         does NOT break `type(C).runtimeCode`, so the zero-immutable
+    ///         property that makes this wrapper hash-verifiable is unaffected.
+    bytes32 internal constant TOKEN_SALT = keccak256("IntegrityToken.v1");
+
     modifier onlyToken() {
         require(msg.sender == address(token), "Wrapper: Not token contract");
         _;
@@ -36,7 +43,7 @@ contract HooksWrapperERC20 is IHooksERC20, ERC165 {
 
     constructor(address issuerAdmin_, string memory tokenName, string memory tokenSymbol, string memory contractURI_) {
         logic = msg.sender;
-        token = new IntegrityERC20(issuerAdmin_, tokenName, tokenSymbol, contractURI_);
+        token = new IntegrityERC20{salt: TOKEN_SALT}(issuerAdmin_, tokenName, tokenSymbol, contractURI_);
     }
 
     function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
