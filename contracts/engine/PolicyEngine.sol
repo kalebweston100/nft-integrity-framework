@@ -5,12 +5,12 @@ import "./PolicyTypes.sol";
 
 /**
  * @title PolicyEngine
- * @notice TEMPLATE. One canonical, declarative transfer policy, shared by every
- *         issuer and every token standard.
+ * @notice One canonical, declarative transfer policy, shared by every issuer
+ *         and every token standard.
  *
- * @dev Not yet wired into the token pipeline — that needs the IHooksERC*
- *      signature change (phase 2 of docs/SPEC-declarative-policy.md). This
- *      compiles, evaluates, and is tested standalone.
+ * @dev Deployed by its token's constructor via CREATE2 and never separately —
+ *      see contracts/token/PolicyERC20.sol, which holds the full statement of
+ *      what the pair guarantees together.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THIS EXISTS
@@ -34,9 +34,28 @@ import "./PolicyTypes.sol";
  *     condition exists. It cannot change without `swapDelay` seconds of
  *     public, on-chain notice.
  *
- * Provable ABSENCE of arbitrary code in a transfer path is the product. The one
- * hole is ExternalGate, which is why hasExternalGate() is public: the presence
- * of arbitrary code becomes visible and verifiable rather than assumed.
+ * Provable ABSENCE of arbitrary code in a transfer path is the product. Where
+ * arbitrary code IS present it is made visible rather than assumed — see
+ * hasExternalGate() and externalRefs(), and report both.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHAT THE TIMELOCK ACTUALLY COVERS
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ *     The timelock covers WHICH CONDITIONS EXIST, not WHO THEY APPLY TO.
+ *
+ * Worth stating precisely because the looser version — "the policy cannot
+ * change without notice" — is false, and four of the ten rule kinds are why.
+ * Allowlist, Blocklist, Frozen and ExternalGate consult a contract at `ref`
+ * whose contents the timelock does not govern: an issuer can freeze an address
+ * by editing a registry, instantly, with no notice at all.
+ *
+ * That is not fully fixable, and pretending otherwise would be worse than
+ * documenting it — sanctions compliance REQUIRES the ability to block
+ * immediately, so a notice period on membership would make the rules unusable
+ * for the market that most wants them. What the timelock does guarantee is that
+ * no NEW KIND of condition can appear: a token with no Frozen rule today cannot
+ * acquire the power to freeze you without swapDelay seconds of public notice.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * ZERO IMMUTABLES — LOAD-BEARING
@@ -82,7 +101,7 @@ contract PolicyEngine {
     address public admin;
 
     /// @notice The only address permitted to record post-transfer state,
-    ///         i.e. the wrapper. Set once in the constructor, no setter.
+    ///         i.e. the token itself. Set once in the constructor, no setter.
     address public notifier;
 
     /// @notice Seconds of public notice required before a rule change commits.
@@ -98,6 +117,13 @@ contract PolicyEngine {
 
     /// @notice Last time an address received tokens, for MinHoldTime.
     mapping(address => uint256) public lastReceived;
+
+    /// @notice Whether the active rule set contains a MinHoldTime rule, cached
+    ///         so recordTransfer can skip its SSTORE when nothing reads it.
+    /// @dev    Refreshed whenever `_rules` changes. Without this every transfer
+    ///         on every policy pays ~20k gas to maintain state that only one of
+    ///         ten rule kinds consults.
+    bool public tracksHoldTime;
 
     // =========================================================================
     //                                MODIFIERS
@@ -118,7 +144,7 @@ contract PolicyEngine {
     // =========================================================================
 
     /// @param admin_     Issuer admin, may change rules subject to the timelock.
-    /// @param notifier_  The wrapper that will report settled transfers.
+    /// @param notifier_  The token that will report settled transfers.
     /// @param swapDelay_ Notice period for rule changes, in seconds.
     /// @param rules_     The initial policy.
     constructor(address admin_, address notifier_, uint256 swapDelay_, Rule[] memory rules_) {
@@ -127,6 +153,7 @@ contract PolicyEngine {
         notifier = notifier_;
         swapDelay = swapDelay_;
         _writeRules(_rules, rules_);
+        _refreshCaches();
     }
 
     // =========================================================================
@@ -148,16 +175,56 @@ contract PolicyEngine {
         return (_pendingRules, pendingAt);
     }
 
-    /// @notice Whether any rule defers to arbitrary external code.
+    /// @notice Whether any rule defers to arbitrary external CODE — i.e. an
+    ///         ExternalGate, whose contract may implement any condition at all.
     /// @dev    When true, the "no other condition exists" guarantee is reduced
     ///         to whatever that contract does. Surface this to users; never
     ///         suppress it.
+    ///
+    ///         NOT the whole story on its own: Allowlist, Blocklist and Frozen
+    ///         also consult an external contract. Their CONDITION is fixed and
+    ///         enumerable ("must be listed in ref"), so they are not gates in
+    ///         this sense — but the membership they read is arbitrary, mutable
+    ///         data controlled by whoever owns `ref`. Use externalRefs() to see
+    ///         every address this policy depends on, of either kind.
     function hasExternalGate() external view returns (bool) {
         uint256 n = _rules.length;
         for (uint256 i; i < n; ++i) {
             if (_rules[i].kind == RuleKind.ExternalGate) return true;
         }
         return false;
+    }
+
+    /// @notice Every external address this policy consults, for any rule kind.
+    /// @dev    The honest completion of hasExternalGate(). A policy of
+    ///         [Allowlist(ref: hostileProxy)] contains no ExternalGate, yet its
+    ///         verdicts are entirely controlled by unverified code at `ref`.
+    ///         Reporting only gates would let that pass as fully enumerable.
+    ///
+    ///         An integrator should check the codehash of each address returned
+    ///         here before treating this policy's rules as the complete story,
+    ///         exactly as they check this engine's own.
+    ///
+    ///         May contain duplicates — one address can back several rules.
+    function externalRefs() external view returns (address[] memory refs) {
+        uint256 n = _rules.length;
+        uint256 count;
+        for (uint256 i; i < n; ++i) {
+            if (_consultsExternal(_rules[i].kind)) ++count;
+        }
+
+        refs = new address[](count);
+        uint256 j;
+        for (uint256 i; i < n; ++i) {
+            if (_consultsExternal(_rules[i].kind)) {
+                refs[j] = _rules[i].ref;
+                ++j;
+            }
+        }
+    }
+
+    function _consultsExternal(RuleKind k) private pure returns (bool) {
+        return k == RuleKind.Allowlist || k == RuleKind.Blocklist || k == RuleKind.Frozen || k == RuleKind.ExternalGate;
     }
 
     // =========================================================================
@@ -271,6 +338,7 @@ contract PolicyEngine {
     ///         the write happens here — on the existing after-transfer hook,
     ///         adding no new call path and no reverse call into the token.
     function recordTransfer(TransferContext calldata ctx) external onlyNotifier {
+        if (!tracksHoldTime) return;
         if (ctx.to != address(0) && ctx.amount > 0) {
             lastReceived[ctx.to] = block.timestamp;
         }
@@ -306,6 +374,7 @@ contract PolicyEngine {
         if (block.timestamp < at) revert TimelockNotElapsed(at);
 
         _writeRules(_rules, _pendingRules);
+        _refreshCaches();
         delete _pendingRules;
         pendingAt = 0;
 
@@ -341,6 +410,22 @@ contract PolicyEngine {
             if (needsRef && newRules[i].ref == address(0)) revert InvalidRule(i);
             if (k == RuleKind.MaxBalanceBps && newRules[i].value > 10_000) revert InvalidRule(i);
         }
+    }
+
+    /// @dev Recomputes cached summaries of the ACTIVE rule set. Must be called
+    ///      after every write to `_rules` and never after a write to
+    ///      `_pendingRules` — a proposal must not change evaluation until it
+    ///      commits.
+    function _refreshCaches() private {
+        bool tracks;
+        uint256 n = _rules.length;
+        for (uint256 i; i < n; ++i) {
+            if (_rules[i].kind == RuleKind.MinHoldTime) {
+                tracks = true;
+                break;
+            }
+        }
+        tracksHoldTime = tracks;
     }
 
     /// @dev `delete` cannot be applied to a storage-pointer parameter, so the
