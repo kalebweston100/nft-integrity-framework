@@ -335,6 +335,29 @@ CI (`.github/workflows/ci.yml`) runs `forge build --sizes`, `forge test`,
 
 ## What's not there yet
 
+- **Timelocked policy changes.** `logic` is captured from `msg.sender` in the
+  wrapper's constructor with no setter, so policy is fixed for the life of the
+  deployment. That is good for verification and bad for the compliance and RWA
+  use cases this shape of extension most suits, where rules genuinely change.
+  A plain `setLogic()` would be the wrong fix — it would delete most of what a
+  canonical wrapper currently proves, since an issuer could verify clean and
+  swap in hostile policy afterwards.
+
+  The version that isn't a trade-off: make the swap two-phase — propose, emit,
+  wait `LOGIC_SWAP_DELAY`, commit — with the delay as a compile-time
+  `constant`. `constant` inlines into bytecode and, unlike `immutable`, does not
+  break `type(C).runtimeCode`, so the wrapper stays hash-verifiable and its
+  codehash then carries a strictly stronger claim:
+
+  > Verifying this wrapper's codehash proves the policy governing this token
+  > cannot change without `N` days of public, on-chain notice.
+
+  No registry, admin key, or off-chain promise can offer that, and a stranger
+  can check it with one `EXTCODEHASH`. A different delay is correctly a
+  different wrapper with a different hash — accepting a 1-day wrapper and a
+  30-day wrapper are two different risk decisions. See
+  [`docs/DESIGN-NOTES.md`](docs/DESIGN-NOTES.md) section 4.1 for the
+  implementation sketch.
 - **Implementation-independence.** Right now nothing can conform without
   inheriting `HooksLogicERC20`/`721`/`1155` and taking `IntegrityERC*` with it.
   That makes this a framework, not a standard. The concrete gate is a
