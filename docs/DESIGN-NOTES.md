@@ -231,9 +231,57 @@ both categories.
 
 ## 6. Where this goes
 
-**Next: an off-chain reader.** Paste a token address, render its policy. The
+**Next: per-action policy.** Specified in `docs/SPEC-per-action-policy.md`, not
+implemented. Makes the policy a function of (action, rule) rather than rule
+alone, which deletes the mint/burn carve-out — the exemption the `burn`
+confiscation hole lived inside — and turns the claim from "only these rules can
+block your transfer" into a total statement over the ABI. It stays decidable
+because it is a product of two finite dimensions rather than an escalation to
+stored programs, and it adds a claim the timelock cannot make: `allowedKinds` is
+`pure` and canonical, so a reader learns the permanent envelope of what could
+*ever* gate an action, not just what gates it today.
+
+This lands **before** the reader, reversing the earlier ordering. The reader's
+whole job is rendering the policy, and this changes the policy's shape from an
+array to a table; building it first means building it twice.
+
+**Then: an off-chain reader.** Paste a token address, render its policy. The
 value of enumerability is only realised once something reads it, and this is a
 UI problem rather than a contract problem — see §3.4.
+
+**Specified but deliberately shelved: address-as-commitment.** A token is
+currently EOA-deployed via plain `CREATE`, so nothing about its origin is
+checkable. Deploying it through a canonical factory with
+`salt = keccak256(abi.encode(config))` would make the address commit to the
+launch configuration, giving the one class of claim this design cannot currently
+make — history. Recompute the address from the token's self-reported config and
+compare; any lie moves the address.
+
+Two details make it cleaner than it first appears. Constructor arguments are
+part of init code, so the address already commits to them — and if the token
+takes *no* constructor arguments and calls back to the factory for its
+parameters (the Uniswap V3 pool pattern), `initCodeHash` collapses to a single
+constant per contract type. More importantly, `type(C).creationCode` compiles
+for contracts holding immutables while `type(C).runtimeCode` does not, so
+switching the verification primitive from runtime hash to CREATE2 address
+**dissolves the zero-immutable constraint as a side effect** — configuration
+could move from storage into immutables.
+
+Shelved rather than rejected: it costs an anchor (a factory address, though one
+derivable from source via the standard deterministic deployer) and it buys a
+second claim while nothing yet reads the first. Full history verification also
+needs the launch config from the factory's deployment log, so it is inherently
+an off-chain, log-indexing operation.
+
+**Rejected: a canonical template executing stored programs.** Considered and
+argued down. A contract that reads operations from storage and executes them is
+an interpreter, and verifying the interpreter proves only that it faithfully
+runs an unbounded program — the enumerability collapses, because sequential
+composition of state transitions is not comprehensible from its parts the way
+AND-composition of predicates is. It is also, structurally, an upgradeable proxy
+with worse gas, which the no-proxies rule already forbids. The salvageable
+fragment is enumerating *capabilities* rather than implementation, which the
+per-action spec above partly subsumes.
 
 **After that: standardise the vocabulary, not the implementation.** If `RuleKind`
 and `Rule` became an ERC, a wallet would write one reader and every conforming
