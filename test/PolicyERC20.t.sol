@@ -28,7 +28,7 @@ contract Gate is IPolicyGate {
         allow = v;
     }
 
-    function check(TransferContext calldata) external view returns (bool, string memory) {
+    function check(ActionContext calldata) external view returns (bool, string memory) {
         return allow ? (true, "") : (false, "gate denied");
     }
 }
@@ -68,9 +68,18 @@ contract PolicyERC20Test is Test {
         return new Rule[](0);
     }
 
+    function _oneFor(Action action, RuleKind kind, uint256 value, address ref)
+        internal
+        pure
+        returns (Rule[] memory rules_)
+    {
+        rules_ = new Rule[](1);
+        rules_[0] = Rule({action: action, kind: kind, value: value, ref: ref, scoped: false, scopeId: 0});
+    }
+
     function _one(RuleKind kind, uint256 value, address ref) internal pure returns (Rule[] memory rules_) {
         rules_ = new Rule[](1);
-        rules_[0] = Rule({kind: kind, value: value, ref: ref, scoped: false, scopeId: 0});
+        rules_[0] = Rule({action: Action.Transfer, kind: kind, value: value, ref: ref, scoped: false, scopeId: 0});
     }
 
     function _engineOf(PolicyERC20 t) internal view returns (PolicyEngine) {
@@ -88,9 +97,9 @@ contract PolicyERC20Test is Test {
         PolicyERC20 lenient = _token(_noRules());
 
         Rule[] memory strict = new Rule[](3);
-        strict[0] = Rule(RuleKind.Allowlist, 0, address(registry), false, 0);
-        strict[1] = Rule(RuleKind.MaxTransfer, 5e18, address(0), false, 0);
-        strict[2] = Rule(RuleKind.LockupUntil, block.timestamp + 365 days, address(0), false, 0);
+        strict[0] = Rule(Action.Transfer, RuleKind.Allowlist, 0, address(registry), false, 0);
+        strict[1] = Rule(Action.Transfer, RuleKind.MaxTransfer, 5e18, address(0), false, 0);
+        strict[2] = Rule(Action.Transfer, RuleKind.LockupUntil, block.timestamp + 365 days, address(0), false, 0);
         PolicyERC20 restricted = _token(strict);
 
         assertEq(address(lenient).codehash, address(restricted).codehash, "token code must not vary");
@@ -110,8 +119,8 @@ contract PolicyERC20Test is Test {
     /// One call answers "under what conditions can this token block me?".
     function test_CLAIM_oneCallEnumeratesTheCompletePolicy() public {
         Rule[] memory input = new Rule[](2);
-        input[0] = Rule(RuleKind.MaxTransfer, 100e18, address(0), false, 0);
-        input[1] = Rule(RuleKind.MinHoldTime, 1 days, address(0), false, 0);
+        input[0] = Rule(Action.Transfer, RuleKind.MaxTransfer, 100e18, address(0), false, 0);
+        input[1] = Rule(Action.Transfer, RuleKind.MinHoldTime, 1 days, address(0), false, 0);
         PolicyERC20 t = _token(input);
 
         PolicyVerification.Report memory r = PolicyVerification.verifyERC20(address(t));
@@ -341,6 +350,13 @@ contract PolicyERC20Test is Test {
     function test_minHoldTimeBlocksThenAllows() public {
         PolicyERC20 t = _token(_one(RuleKind.MinHoldTime, 1 days, address(0)));
 
+        // Absolute offsets from one base read: the optimiser treats
+        // block.timestamp as constant within a call frame, so computing a
+        // second warp from it silently reuses the pre-warp value.
+        uint256 t0 = block.timestamp;
+
+        // Alice was minted her balance, which starts her own hold clock.
+        vm.warp(t0 + 1 days);
         vm.prank(ALICE);
         t.transfer(BOB, 10e18);
 
@@ -348,10 +364,31 @@ contract PolicyERC20Test is Test {
         vm.expectRevert(abi.encodeWithSelector(PolicyTokenBase.PolicyDenied.selector, "min hold time"));
         t.transfer(CAROL, 1e18);
 
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(t0 + 2 days);
         vm.prank(BOB);
         t.transfer(CAROL, 1e18);
         assertEq(t.balanceOf(CAROL), 1e18);
+    }
+
+    /// A minted balance is a receipt. Without this, an issuer could mint to a
+    /// confederate who then moves the tokens immediately, walking straight past
+    /// a hold period every ordinary holder has to respect — the rule would be
+    /// enumerated and real, and simply not apply to the one party best placed
+    /// to abuse it.
+    function test_CLAIM_mintStartsTheHoldClock() public {
+        PolicyERC20 t = _token(_one(RuleKind.MinHoldTime, 1 days, address(0)));
+        PolicyEngine e = _engineOf(t);
+
+        assertEq(e.lastReceived(ALICE), block.timestamp, "mint recorded a receipt");
+
+        vm.prank(ALICE);
+        vm.expectRevert(abi.encodeWithSelector(PolicyTokenBase.PolicyDenied.selector, "min hold time"));
+        t.transfer(BOB, 1e18);
+
+        vm.warp(block.timestamp + 1 days);
+        vm.prank(ALICE);
+        t.transfer(BOB, 1e18);
+        assertEq(t.balanceOf(BOB), 1e18);
     }
 
     /// The engine only maintains hold-time state when a rule actually reads it.
@@ -366,6 +403,7 @@ contract PolicyERC20Test is Test {
         PolicyERC20 held = _token(_one(RuleKind.MinHoldTime, 1 days, address(0)));
         assertTrue(_engineOf(held).tracksHoldTime());
 
+        vm.warp(block.timestamp + 1 days); // clear Alice's own mint receipt
         vm.prank(ALICE);
         held.transfer(BOB, 1e18);
         assertEq(_engineOf(held).lastReceived(BOB), block.timestamp);
@@ -373,8 +411,8 @@ contract PolicyERC20Test is Test {
 
     function test_rulesAreAndedAndFirstFailureNamesItself() public {
         Rule[] memory both = new Rule[](2);
-        both[0] = Rule(RuleKind.MaxTransfer, 5e18, address(0), false, 0);
-        both[1] = Rule(RuleKind.LockupUntil, block.timestamp + 1 days, address(0), false, 0);
+        both[0] = Rule(Action.Transfer, RuleKind.MaxTransfer, 5e18, address(0), false, 0);
+        both[1] = Rule(Action.Transfer, RuleKind.LockupUntil, block.timestamp + 1 days, address(0), false, 0);
         PolicyERC20 t = _token(both);
 
         // Passes rule 0, fails rule 1.
@@ -421,8 +459,10 @@ contract PolicyERC20Test is Test {
         PolicyERC20 t = _token(_one(RuleKind.MinHoldTime, 1 days, address(0)));
         PolicyEngine e = _engineOf(t);
 
-        TransferContext memory ctx = TransferContext({
+        ActionContext memory ctx = ActionContext({
+            action: Action.Transfer,
             standard: TokenStandard.ERC20,
+            actor: ALICE,
             from: ALICE,
             to: BOB,
             id: 0,

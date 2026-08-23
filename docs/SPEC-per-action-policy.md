@@ -1,10 +1,9 @@
 # Spec: per-action policy
 
-> **STATUS: SPECIFICATION ONLY. NOT IMPLEMENTED.**
-> Nothing in `contracts/` does this yet. The shipped engine holds one flat rule
-> array evaluated on transfers only. This document describes the next data
-> model and exists so the design is settled before code is written; it is not a
-> description of the repository.
+> **STATUS: IMPLEMENTED.** This describes what `contracts/` does.
+> Three deviations from the draft, all recorded in section 12: the two
+> allowance/operator exemptions were adopted, `Burn` remained gateable, and
+> minting now records a hold-time receipt.
 
 ---
 
@@ -348,13 +347,30 @@ rename, which is the signal that the generalisation is behaving.
   build it after this lands rather than before — the shape it renders changes
   here.
 
-## 12. Open questions
+## 12. Questions that were open, and how they were settled
 
-- Should `Approve` distinguish increase from decrease? Reducing an allowance is
-  strictly de-risking and arguably should never be blockable. Leaning yes,
-  as an evaluation-time exemption rather than a sixth action.
-- Does `SetOperator` revocation need the same exemption? Same argument, more
-  strongly — a policy that can prevent you revoking an operator is a trap.
-- Should `Burn` be gateable at all? A policy that can stop you destroying your
-  own tokens has no holder-protective reading. Possibly `allowedKinds(Burn)`
-  should be identity rules only.
+**Allowance decreases are never gated.** Adopted as an evaluation-time
+exemption rather than a sixth action: `approve` consults the policy only when
+the new allowance exceeds the current one. A policy able to stop you lowering an
+approval could pin you to it, which is a trap rather than a restriction.
+
+**Operator revocation is never gated.** Same argument, more strongly. Only
+`setApprovalForAll(op, true)` consults the policy. For ERC-721, `approve` to
+`address(0)` is likewise exempt.
+
+**`Burn` stayed gateable.** The draft leaned toward identity rules only, on the
+grounds that stopping you destroying your own tokens protects nobody. Kept as
+specified because there are legitimate issuer-side reasons — a vesting period
+that also prevents burn-to-claim gaming — and because `burn` already cannot
+reach anyone else's balance, so the holder-protective concern is handled
+structurally rather than by restricting the vocabulary. `MaxBalance`,
+`MaxBalanceBps` and `HolderCap` remain excluded, since all three misbehave when
+`to` is the zero address.
+
+**One thing changed that the draft did not anticipate.** Minting now calls
+`recordTransfer`, so a minted balance starts the `MinHoldTime` clock. Without
+it, an issuer could mint to a confederate who moves the tokens immediately,
+walking past a hold period every ordinary holder has to respect — the rule would
+be enumerated, real, and simply not apply to the party best placed to abuse it.
+This is why `MinHoldTime` is excluded from `Mint` in the matrix but a mint still
+writes a receipt: the clock starts, the rule does not gate the mint itself.

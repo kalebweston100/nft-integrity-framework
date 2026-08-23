@@ -25,13 +25,13 @@ contract MockGate is IPolicyGate {
         allow = v;
     }
 
-    function check(TransferContext calldata) external view returns (bool, string memory) {
+    function check(ActionContext calldata) external view returns (bool, string memory) {
         return allow ? (true, "") : (false, "gate denied");
     }
 }
 
 contract RevertingGate is IPolicyGate {
-    function check(TransferContext calldata) external pure returns (bool, string memory) {
+    function check(ActionContext calldata) external pure returns (bool, string memory) {
         revert("boom");
     }
 }
@@ -63,13 +63,25 @@ contract PolicyEngineTest is Test {
         out[0] = r;
     }
 
-    function _rule(RuleKind k, uint256 v, address ref) internal pure returns (Rule memory) {
-        return Rule({kind: k, value: v, ref: ref, scoped: false, scopeId: 0});
+    /// Defaults to Action.Transfer; use _ruleFor to target another entry point.
+    function _ruleFor(Action a, RuleKind k, uint256 v, address ref) internal pure returns (Rule memory) {
+        return Rule({action: a, kind: k, value: v, ref: ref, scoped: false, scopeId: 0});
     }
 
-    function _ctx(address from, address to, uint256 amount) internal pure returns (TransferContext memory) {
-        return TransferContext({
+    function _rule(RuleKind k, uint256 v, address ref) internal pure returns (Rule memory) {
+        return Rule({action: Action.Transfer, kind: k, value: v, ref: ref, scoped: false, scopeId: 0});
+    }
+
+    function _ctx(address from, address to, uint256 amount) internal pure returns (ActionContext memory) {
+        ActionContext memory c = _ctxFor(Action.Transfer, from, to, amount);
+        return c;
+    }
+
+    function _ctxFor(Action a, address from, address to, uint256 amount) internal pure returns (ActionContext memory) {
+        return ActionContext({
+            action: a,
             standard: TokenStandard.ERC20,
+            actor: from,
             from: from,
             to: to,
             id: 0,
@@ -210,7 +222,7 @@ contract PolicyEngineTest is Test {
     function test_maxBalance_usesPostTransferBalance() public {
         PolicyEngine e = _engine(_one(_rule(RuleKind.MaxBalance, 500, address(0))));
 
-        TransferContext memory c = _ctx(ALICE, BOB, 100);
+        ActionContext memory c = _ctx(ALICE, BOB, 100);
         c.toBalance = 400;
         (bool ok,) = e.evaluate(c);
         assertTrue(ok, "400 + 100 == cap");
@@ -224,7 +236,7 @@ contract PolicyEngineTest is Test {
         // 10% of a 10_000 supply == 1_000.
         PolicyEngine e = _engine(_one(_rule(RuleKind.MaxBalanceBps, 1_000, address(0))));
 
-        TransferContext memory c = _ctx(ALICE, BOB, 1_000);
+        ActionContext memory c = _ctx(ALICE, BOB, 1_000);
         (bool ok,) = e.evaluate(c);
         assertTrue(ok);
 
@@ -236,7 +248,7 @@ contract PolicyEngineTest is Test {
     function test_holderCap_onlyCountsNewHolders() public {
         PolicyEngine e = _engine(_one(_rule(RuleKind.HolderCap, 5, address(0))));
 
-        TransferContext memory c = _ctx(ALICE, BOB, 100); // holderCount 5, toBalance 0
+        ActionContext memory c = _ctx(ALICE, BOB, 100); // holderCount 5, toBalance 0
         (bool ok,) = e.evaluate(c);
         assertFalse(ok, "new holder would exceed the cap");
 
@@ -275,10 +287,19 @@ contract PolicyEngineTest is Test {
     // =========================================================================
 
     function test_scopedRule_appliesOnlyToItsTokenId() public {
-        Rule[] memory r = _one(Rule({kind: RuleKind.MaxTransfer, value: 10, ref: address(0), scoped: true, scopeId: 7}));
+        Rule[] memory r = _one(
+            Rule({
+                action: Action.Transfer,
+                kind: RuleKind.MaxTransfer,
+                value: 10,
+                ref: address(0),
+                scoped: true,
+                scopeId: 7
+            })
+        );
         PolicyEngine e = _engine(r);
 
-        TransferContext memory c = _ctx(ALICE, BOB, 100);
+        ActionContext memory c = _ctx(ALICE, BOB, 100);
         c.standard = TokenStandard.ERC1155;
 
         c.id = 7;

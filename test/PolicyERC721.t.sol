@@ -44,9 +44,18 @@ contract PolicyERC721Test is Test {
         return new Rule[](0);
     }
 
+    function _oneFor(Action action, RuleKind kind, uint256 value, address ref)
+        internal
+        pure
+        returns (Rule[] memory rs)
+    {
+        rs = new Rule[](1);
+        rs[0] = Rule({action: action, kind: kind, value: value, ref: ref, scoped: false, scopeId: 0});
+    }
+
     function _one(RuleKind kind, uint256 value, address ref) internal pure returns (Rule[] memory rs) {
         rs = new Rule[](1);
-        rs[0] = Rule({kind: kind, value: value, ref: ref, scoped: false, scopeId: 0});
+        rs[0] = Rule({action: Action.Transfer, kind: kind, value: value, ref: ref, scoped: false, scopeId: 0});
     }
 
     /// Mints ids 1..3 to Alice.

@@ -108,7 +108,18 @@ library PolicyVerification {
      * @param externalRefs    Every address this policy consults, of any rule
      *                        kind. Each is unverified code whose codehash a
      *                        thorough integrator should check too.
-     * @param rules           The complete, exhaustive policy.
+     * @param rules           The complete, exhaustive policy, across every
+     *                        action. Each rule names the entry point it
+     *                        governs.
+     * @param activeActions   Bitmap of actions at least one rule governs,
+     *                        indexed by Action. A zero bit means that entry
+     *                        point is currently ungated.
+     * @param allowedKindsBy  Per action, the bitmask of rule kinds that may
+     *                        EVER govern it. Read off canonical `pure` code, so
+     *                        this is a permanent bound rather than a current
+     *                        state: a kind absent here can never apply to that
+     *                        action, with or without notice. Strictly stronger
+     *                        than what the timelock promises.
      */
     struct Report {
         bool tokenCanonical;
@@ -119,6 +130,8 @@ library PolicyVerification {
         uint256 pendingAt;
         address[] externalRefs;
         Rule[] rules;
+        uint256 activeActions;
+        uint256[5] allowedKindsBy;
     }
 
     // =========================================================================
@@ -230,6 +243,11 @@ library PolicyVerification {
         report.externalRefs = policy.externalRefs();
         report.swapDelay = policy.swapDelay();
         (, report.pendingAt) = policy.pendingRules();
+        report.activeActions = policy.activeActions();
+
+        for (uint256 i; i < 5; ++i) {
+            report.allowedKindsBy[i] = policy.allowedKinds(Action(i));
+        }
     }
 
     // =========================================================================
@@ -278,5 +296,34 @@ library PolicyVerification {
      */
     function isUnconditional(Report memory report) internal pure returns (bool) {
         return report.tokenCanonical && report.policyCanonical && report.rules.length == 0 && report.pendingAt == 0;
+    }
+
+    /**
+     * @notice The same claim for one entry point: nothing can block this action.
+     *
+     * @dev Lets a reader render a token honestly when it is governed unevenly —
+     *      "transfers unconditional, minting restricted" is the common shape for
+     *      a collection that caps supply per wallet but never restricts
+     *      secondary trading, and collapsing that to a single red badge would
+     *      misrepresent it.
+     *
+     *      `pendingAt == 0` is part of this too: a pending proposal may add a
+     *      rule to ANY action, so no action can be called unconditional while
+     *      one is queued.
+     */
+    function isUnconditionalFor(Report memory report, Action action) internal pure returns (bool) {
+        if (!report.tokenCanonical || !report.policyCanonical || report.pendingAt != 0) return false;
+        return report.activeActions & (1 << uint256(action)) == 0;
+    }
+
+    /**
+     * @notice Whether `kind` could ever govern `action` on this token.
+     * @dev False is a permanent guarantee, not a snapshot — the answer comes
+     *      from `pure` code inside the canonical engine, so no proposal and no
+     *      elapsed timelock can change it.
+     */
+    function canEverApply(Report memory report, Action action, RuleKind kind) internal pure returns (bool) {
+        if (!report.policyCanonical) return true; // unknown code: assume nothing
+        return report.allowedKindsBy[uint256(action)] & (1 << uint256(kind)) != 0;
     }
 }

@@ -55,18 +55,31 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  * ordinary ERC-721 and is fully marketplace-compatible.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * MINT AND BURN
+ * EVERY ENTRY POINT IS GOVERNED
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * `mint` is issuer-admin gated and outside the policy — the issuer controls
- * issuance regardless, and a lockup rule would make the initial drop
- * impossible.
+ * There is no carve-out. Transfers, `approve`, `setApprovalForAll`, `mint` and
+ * `burn` each consult the policy for their own Action, so the claim above is
+ * total over the ABI rather than scoped to transfers. An ungated action costs
+ * one warm SLOAD inside the engine.
  *
- * `burn` is restricted to the OWNER of the token. Not the admin, and — unlike
- * ERC721Burnable — not an approved operator either: approving a marketplace to
- * sell your NFT should never be approval to destroy it. An admin able to burn
- * an arbitrary holder's token holds a confiscation lever strictly stronger than
- * the freeze this design refuses to implement.
+ * `setApprovalForAll` being its own Action is what lets an operator allowlist
+ * be expressed HONESTLY — as an enumerated rule with a notice period, visible
+ * to anyone who reads the policy — rather than as the kind of silent operator
+ * filter this design exists to make impossible.
+ *
+ * Three exemptions are structural rather than policy, because a rule that could
+ * impose them would be a trap:
+ *
+ *   - REVOKING an approval (`approve(address(0), id)`) is never gated.
+ *   - REVOKING an operator (`setApprovalForAll(op, false)`) is never gated. A
+ *     policy able to stop you removing an operator is strictly worse than one
+ *     that stopped you adding it.
+ *   - `burn` is restricted to the OWNER of the token — not the admin, and,
+ *     unlike ERC721Burnable, not an approved operator either: approving a
+ *     marketplace to sell your NFT should never be approval to destroy it. An
+ *     admin able to burn an arbitrary holder's token holds a confiscation
+ *     lever, strictly stronger than the freeze this design refuses.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * NO REENTRANCY GUARD, DELIBERATELY
@@ -199,7 +212,19 @@ contract PolicyERC721 is PolicyTokenBase {
     {
         if (to == address(0)) return (false, "zero recipient");
         if (_owners[tokenId] != from) return (false, "not owned by from");
-        return _policy.evaluate(_context(from, to, tokenId));
+        return _policy.evaluate(_ctx(Action.Transfer, from, from, to, tokenId));
+    }
+
+    /// @notice The policy verdict for any action, not only transfers.
+    /// @dev Standard-conformance requirements are NOT checked here — this
+    ///      answers "would the policy allow it", which is the half an
+    ///      integrator cannot work out for itself.
+    function canPerform(Action action, address actor, address from, address to, uint256 tokenId)
+        external
+        view
+        returns (bool allowed, string memory reason)
+    {
+        return _policy.evaluate(_ctx(action, actor, from, to, tokenId));
     }
 
     /// @notice ERC-165. Advertises IPolicyGoverned so an integrator can discover
@@ -231,15 +256,23 @@ contract PolicyERC721 is PolicyTokenBase {
         _checkOnERC721Received(from, to, tokenId, data);
     }
 
+    /// @dev Only a GRANT is gated. Revoking with address(0) always succeeds:
+    ///      a policy able to stop you withdrawing an approval could pin you to
+    ///      it, which is a trap rather than a restriction.
     function approve(address to, uint256 tokenId) external {
         address tokenOwner = _ownerOf(tokenId);
         if (msg.sender != tokenOwner && !_operatorApprovals[tokenOwner][msg.sender]) revert NotOwnerOrOperator();
+        if (to != address(0)) _gate(_ctx(Action.Approve, msg.sender, tokenOwner, to, tokenId));
         _tokenApprovals[tokenId] = to;
         emit Approval(tokenOwner, to, tokenId);
     }
 
+    /// @dev Only a GRANT is gated; revocation always succeeds. See the contract
+    ///      NatSpec on why an operator allowlist belongs here rather than in a
+    ///      silent filter.
     function setApprovalForAll(address operator, bool approved) external {
         if (msg.sender == operator) revert SelfApproval();
+        if (approved) _gate(_ctx(Action.SetOperator, msg.sender, msg.sender, operator, 0));
         _operatorApprovals[msg.sender][operator] = approved;
         emit ApprovalForAll(msg.sender, operator, approved);
     }
@@ -264,8 +297,7 @@ contract PolicyERC721 is PolicyTokenBase {
         // [THE ONLY DISCRETIONARY GATE] `evaluate` is `view`, so this is a
         // STATICCALL: the engine cannot write storage, emit, or reenter this
         // contract in any state-changing way, to arbitrary subcall depth.
-        (bool ok, string memory reason) = _policy.evaluate(_context(from, to, tokenId));
-        if (!ok) revert PolicyDenied(reason);
+        _gate(_ctx(Action.Transfer, msg.sender, from, to, tokenId));
 
         // [LOCKED] Ownership mutation. Nothing above this line has written
         // state, so the balances the policy saw are the pre-transfer values.
@@ -275,7 +307,7 @@ contract PolicyERC721 is PolicyTokenBase {
         emit Transfer(from, to, tokenId);
 
         // [POST-TRANSFER] Lets stateful rules (MinHoldTime) record what settled.
-        _policy.recordTransfer(_context(from, to, tokenId));
+        _policy.recordTransfer(_ctx(Action.Transfer, msg.sender, from, to, tokenId));
     }
 
     /// @dev A self-transfer must not touch balances: decrementing and then
@@ -301,9 +333,15 @@ contract PolicyERC721 is PolicyTokenBase {
 
     /// @dev The context the policy evaluates. ERC-721 fixes `amount` at 1 and
     ///      puts the token id in `id`; balances are token COUNTS.
-    function _context(address from, address to, uint256 tokenId) private view returns (TransferContext memory) {
-        return TransferContext({
+    function _ctx(Action action, address actor, address from, address to, uint256 tokenId)
+        private
+        view
+        returns (ActionContext memory)
+    {
+        return ActionContext({
+            action: action,
             standard: TokenStandard.ERC721,
+            actor: actor,
             from: from,
             to: to,
             id: tokenId,
@@ -325,6 +363,8 @@ contract PolicyERC721 is PolicyTokenBase {
         if (to == address(0)) revert ZeroAddress();
         if (_owners[tokenId] != address(0)) revert TokenAlreadyMinted();
 
+        _gate(_ctx(Action.Mint, msg.sender, address(0), to, tokenId));
+
         uint256 toBalance = _balances[to];
         unchecked {
             _balances[to] = toBalance + 1;
@@ -334,6 +374,11 @@ contract PolicyERC721 is PolicyTokenBase {
         if (toBalance == 0) ++_holderCount;
 
         emit Transfer(address(0), to, tokenId);
+
+        // A minted token is a receipt, so the MinHoldTime clock starts here too
+        // — otherwise mint-then-transfer walks past a hold period that a
+        // transfer between holders would have to respect.
+        _policy.recordTransfer(_ctx(Action.Mint, msg.sender, address(0), to, tokenId));
     }
 
     /// @notice Destroy a token you own.
@@ -343,6 +388,8 @@ contract PolicyERC721 is PolicyTokenBase {
         address tokenOwner = _owners[tokenId];
         if (tokenOwner == address(0)) revert NonexistentToken();
         if (msg.sender != tokenOwner) revert NotOwnerOrApproved();
+
+        _gate(_ctx(Action.Burn, msg.sender, tokenOwner, address(0), tokenId));
 
         delete _tokenApprovals[tokenId];
         delete _owners[tokenId];

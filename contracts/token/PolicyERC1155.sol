@@ -57,19 +57,30 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  * PER-ID ACCOUNTING
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * `totalSupply` and `holderCount` in the TransferContext are PER ID, matching
+ * `totalSupply` and `holderCount` in the ActionContext are PER ID, matching
  * the way rules are scoped: a rule with `scoped = true` applies only to its own
  * id, so the quantities it compares against must be that id's. A MaxBalanceBps
  * rule on id 7 is a share of id 7's supply, not of the collection.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * MINT AND BURN
+ * EVERY ENTRY POINT IS GOVERNED
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * `mint`/`mintBatch` are issuer-admin gated and outside the policy.
- * `burn`/`burnBatch` destroy the caller's own balance only — never an admin
- * power, because burning from an arbitrary holder is confiscation, a strictly
- * stronger lever than the freeze this design refuses to implement.
+ * There is no carve-out. Transfers, `setApprovalForAll`, `mint`/`mintBatch` and
+ * `burn`/`burnBatch` each consult the policy for their own Action, so the claim
+ * above is total over the ABI rather than scoped to transfers. Batch variants
+ * gate per item, consistent with a batch being exactly N sequential singles.
+ *
+ * `setApprovalForAll` being its own Action is what lets an operator allowlist
+ * be expressed HONESTLY — an enumerated rule with a notice period — rather than
+ * as the kind of silent operator filter this design exists to make impossible.
+ * Revoking an operator is never gated: a policy able to stop you removing one
+ * is strictly worse than one that stopped you adding it.
+ *
+ * `burn`/`burnBatch` destroy the caller's own balance only. There is no admin
+ * path to another holder's tokens, because burning from an arbitrary holder is
+ * confiscation — a strictly stronger lever than the freeze this design refuses
+ * to implement.
  */
 contract PolicyERC1155 is PolicyTokenBase {
     // =========================================================================
@@ -175,7 +186,19 @@ contract PolicyERC1155 is PolicyTokenBase {
     {
         if (to == address(0)) return (false, "zero recipient");
         if (_balances[id][from] < amount) return (false, "insufficient balance");
-        return _policy.evaluate(_context(from, to, id, amount));
+        return _policy.evaluate(_ctx(Action.Transfer, from, from, to, id, amount));
+    }
+
+    /// @notice The policy verdict for any action, not only transfers.
+    /// @dev Standard-conformance requirements are NOT checked here — this
+    ///      answers "would the policy allow it", which is the half an
+    ///      integrator cannot work out for itself.
+    function canPerform(Action action, address actor, address from, address to, uint256 id, uint256 amount)
+        external
+        view
+        returns (bool allowed, string memory reason)
+    {
+        return _policy.evaluate(_ctx(action, actor, from, to, id, amount));
     }
 
     /// @notice ERC-165. Advertises IPolicyGoverned so an integrator can discover
@@ -225,8 +248,12 @@ contract PolicyERC1155 is PolicyTokenBase {
         _checkOnERC1155BatchReceived(msg.sender, from, to, ids, amounts, data);
     }
 
+    /// @dev Only a GRANT is gated; revocation always succeeds. See the contract
+    ///      NatSpec on why an operator allowlist belongs here rather than in a
+    ///      silent filter.
     function setApprovalForAll(address operator, bool approved) external {
         if (msg.sender == operator) revert SelfApproval();
+        if (approved) _gate(_ctx(Action.SetOperator, msg.sender, msg.sender, operator, 0, 1));
         _operatorApprovals[msg.sender][operator] = approved;
         emit ApprovalForAll(msg.sender, operator, approved);
     }
@@ -255,14 +282,13 @@ contract PolicyERC1155 is PolicyTokenBase {
         // [THE ONLY DISCRETIONARY GATE] `evaluate` is `view`, so this is a
         // STATICCALL: the engine cannot write storage, emit, or reenter this
         // contract in any state-changing way, to arbitrary subcall depth.
-        (bool ok, string memory reason) = _policy.evaluate(_context(from, to, id, amount));
-        if (!ok) revert PolicyDenied(reason);
+        _gate(_ctx(Action.Transfer, msg.sender, from, to, id, amount));
 
         // [LOCKED] Balance mutation.
         _moveBalance(from, to, id, amount);
 
         // [POST-TRANSFER] Lets stateful rules (MinHoldTime) record what settled.
-        _policy.recordTransfer(_context(from, to, id, amount));
+        _policy.recordTransfer(_ctx(Action.Transfer, msg.sender, from, to, id, amount));
     }
 
     /// @dev The self-transfer guard is load-bearing, not an optimisation.
@@ -289,13 +315,15 @@ contract PolicyERC1155 is PolicyTokenBase {
 
     /// @dev The context the policy evaluates. `totalSupply` and `holderCount`
     ///      are PER ID — see the contract NatSpec.
-    function _context(address from, address to, uint256 id, uint256 amount)
+    function _ctx(Action action, address actor, address from, address to, uint256 id, uint256 amount)
         private
         view
-        returns (TransferContext memory)
+        returns (ActionContext memory)
     {
-        return TransferContext({
+        return ActionContext({
+            action: action,
             standard: TokenStandard.ERC1155,
+            actor: actor,
             from: from,
             to: to,
             id: id,
@@ -348,17 +376,26 @@ contract PolicyERC1155 is PolicyTokenBase {
     }
 
     function _mintItem(address to, uint256 id, uint256 amount) private {
+        _gate(_ctx(Action.Mint, msg.sender, address(0), to, id, amount));
+
         uint256 toBalance = _balances[id][to];
         _totalSupply[id] += amount;
         unchecked {
             _balances[id][to] = toBalance + amount;
         }
         if (amount > 0 && toBalance == 0) ++_holderCount[id];
+
+        // A minted balance is a receipt, so the MinHoldTime clock starts here
+        // too — otherwise mint-then-transfer walks past a hold period that a
+        // transfer between holders would have to respect.
+        _policy.recordTransfer(_ctx(Action.Mint, msg.sender, address(0), to, id, amount));
     }
 
     function _burnItem(address from, uint256 id, uint256 amount) private {
         uint256 fromBalance = _balances[id][from];
         if (fromBalance < amount) revert InsufficientBalance();
+
+        _gate(_ctx(Action.Burn, msg.sender, from, address(0), id, amount));
 
         unchecked {
             _balances[id][from] = fromBalance - amount;

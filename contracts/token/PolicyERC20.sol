@@ -75,20 +75,28 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  * market and cannot do it without notice. That is the point, not a limitation.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * MINT AND BURN
+ * EVERY ENTRY POINT IS GOVERNED
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * `mint` is unconditionally issuer-admin gated and outside the policy. The
- * issuer already controls supply completely, so routing minting through the
- * rules would add nothing a holder can rely on, and a LockupUntil rule would
- * make initial distribution impossible.
+ * There is no carve-out. `transfer`, `approve`, `mint` and `burn` each consult
+ * the policy for their own Action, so the claim above is total over the ABI
+ * rather than scoped to transfers. A policy may leave any action ungated, and
+ * an ungated action costs one warm SLOAD inside the engine.
  *
- * `burn` destroys the caller's own balance and nothing else. It is deliberately
- * not an admin power: an admin able to burn from an arbitrary address holds a
- * confiscation lever, which is strictly stronger than the freeze this contract
- * refuses to implement. Blocking a transfer stops you moving a token; burning
- * it takes the token outright. A design that rejects `pause()` on principle
- * cannot accept `burn(address,uint256)`.
+ * Two exemptions are structural rather than policy, because a rule that could
+ * impose them would be a trap:
+ *
+ *   - REDUCING an allowance is never gated. De-risking must always succeed; a
+ *     policy able to prevent you lowering an approval could pin you to it.
+ *   - `burn` destroys the caller's own balance and nothing else. There is no
+ *     admin path to another holder's tokens: an admin able to burn from an
+ *     arbitrary address holds a confiscation lever, strictly stronger than the
+ *     freeze this contract refuses to implement. Blocking a transfer stops you
+ *     moving a token; burning takes it outright.
+ *
+ * `mint` stays issuer-admin gated on top of its policy — the admin check is an
+ * authorization requirement, not a discretionary blocking condition, and the
+ * issuer controls supply regardless.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * ZERO IMMUTABLES — LOAD-BEARING
@@ -203,7 +211,20 @@ contract PolicyERC20 is PolicyTokenBase {
     {
         if (to == address(0)) return (false, "zero recipient");
         if (_balances[from] < amount) return (false, "insufficient balance");
-        return _policy.evaluate(_context(from, to, amount));
+        return _policy.evaluate(_ctx(Action.Transfer, from, from, to, amount));
+    }
+
+    /// @notice The policy verdict for any action, not only transfers.
+    /// @dev Standard-conformance requirements are NOT checked here — this
+    ///      answers "would the policy allow it", which is the half an
+    ///      integrator cannot work out for itself. Balances are read from
+    ///      storage, so a caller supplies only the action-specific arguments.
+    function canPerform(Action action, address actor, address from, address to, uint256 amount)
+        external
+        view
+        returns (bool allowed, string memory reason)
+    {
+        return _policy.evaluate(_ctx(action, actor, from, to, amount));
     }
 
     /// @notice ERC-165. Advertises IPolicyGoverned so an integrator can discover
@@ -232,7 +253,13 @@ contract PolicyERC20 is PolicyTokenBase {
         return true;
     }
 
+    /// @dev Only an INCREASE is gated. Reducing or revoking an allowance is
+    ///      always permitted: a policy able to stop you lowering an approval
+    ///      could pin you to it, which is a trap rather than a restriction.
     function approve(address spender, uint256 amount) external returns (bool) {
+        if (amount > _allowances[msg.sender][spender]) {
+            _gate(_ctx(Action.Approve, msg.sender, msg.sender, spender, amount));
+        }
         _allowances[msg.sender][spender] = amount;
         emit Approval(msg.sender, spender, amount);
         return true;
@@ -264,12 +291,11 @@ contract PolicyERC20 is PolicyTokenBase {
         // cannot reenter this contract in any state-changing way. The read-only
         // flag covers the entire subcall frame to arbitrary depth, including
         // any registry or external gate a rule consults.
-        (bool ok, string memory reason) = _policy.evaluate(_context(from, to, amount));
-        if (!ok) revert PolicyDenied(reason);
+        _gate(_ctx(Action.Transfer, msg.sender, from, to, amount));
 
         // [LOCKED] Balance mutation. Nothing above this line has written state,
         // so the balances the policy saw are the pre-transfer values its
-        // TransferContext documentation promises.
+        // ActionContext documentation promises.
         _moveBalance(from, to, amount);
 
         emit Transfer(from, to, amount);
@@ -279,7 +305,7 @@ contract PolicyERC20 is PolicyTokenBase {
         // canonical, so this is not an untrusted call and needs no try/catch:
         // its only write is lastReceived, and a revert here can only mean a bug
         // in code the verifier has already checked.
-        _policy.recordTransfer(_context(from, to, amount));
+        _policy.recordTransfer(_ctx(Action.Transfer, msg.sender, from, to, amount));
     }
 
     /// @dev Holder accounting is maintained on the 0 <-> non-zero transitions
@@ -312,9 +338,15 @@ contract PolicyERC20 is PolicyTokenBase {
     /// @dev The context the policy evaluates. The token PUSHES this; the policy
     ///      never calls back to fetch it, which is what lets balance-dependent
     ///      rules exist without any reverse call path.
-    function _context(address from, address to, uint256 amount) private view returns (TransferContext memory) {
-        return TransferContext({
+    function _ctx(Action action, address actor, address from, address to, uint256 amount)
+        private
+        view
+        returns (ActionContext memory)
+    {
+        return ActionContext({
+            action: action,
             standard: TokenStandard.ERC20,
+            actor: actor,
             from: from,
             to: to,
             id: 0,
@@ -335,6 +367,8 @@ contract PolicyERC20 is PolicyTokenBase {
     function mint(address to, uint256 amount) external onlyIssuerAdmin {
         if (to == address(0)) revert ZeroAddress();
 
+        _gate(_ctx(Action.Mint, msg.sender, address(0), to, amount));
+
         uint256 toBalance = _balances[to];
         _totalSupply += amount;
         unchecked {
@@ -343,6 +377,11 @@ contract PolicyERC20 is PolicyTokenBase {
         if (amount > 0 && toBalance == 0) ++_holderCount;
 
         emit Transfer(address(0), to, amount);
+
+        // A minted balance is a receipt, so the MinHoldTime clock must start
+        // here too. Without this, mint-then-transfer walks straight past a hold
+        // period that a transfer between holders would have to respect.
+        _policy.recordTransfer(_ctx(Action.Mint, msg.sender, address(0), to, amount));
     }
 
     /// @notice Destroy some of the caller's own balance.
@@ -355,6 +394,8 @@ contract PolicyERC20 is PolicyTokenBase {
     function burn(uint256 amount) external {
         uint256 fromBalance = _balances[msg.sender];
         if (fromBalance < amount) revert InsufficientBalance();
+
+        _gate(_ctx(Action.Burn, msg.sender, msg.sender, address(0), amount));
 
         unchecked {
             _balances[msg.sender] = fromBalance - amount;

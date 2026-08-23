@@ -231,19 +231,17 @@ both categories.
 
 ## 6. Where this goes
 
-**Next: per-action policy.** Specified in `docs/SPEC-per-action-policy.md`, not
-implemented. Makes the policy a function of (action, rule) rather than rule
-alone, which deletes the mint/burn carve-out — the exemption the `burn`
-confiscation hole lived inside — and turns the claim from "only these rules can
-block your transfer" into a total statement over the ABI. It stays decidable
-because it is a product of two finite dimensions rather than an escalation to
-stored programs, and it adds a claim the timelock cannot make: `allowedKinds` is
-`pure` and canonical, so a reader learns the permanent envelope of what could
-*ever* gate an action, not just what gates it today.
+**Shipped: per-action policy.** `docs/SPEC-per-action-policy.md`, now
+implemented. The policy is a function of (action, rule) rather than rule alone,
+which deleted the mint/burn carve-out — the exemption the `burn` confiscation
+hole lived inside — and turned the claim from "only these rules can block your
+transfer" into a total statement over the ABI.
 
-This lands **before** the reader, reversing the earlier ordering. The reader's
-whole job is rendering the policy, and this changes the policy's shape from an
-array to a table; building it first means building it twice.
+It stayed decidable because it is a product of two finite dimensions rather
+than an escalation to stored programs. It also added a claim the timelock
+cannot make: `allowedKinds` is `pure` and therefore canonical, so a reader
+learns the permanent envelope of what could *ever* gate an action, not merely
+what gates it today.
 
 **Then: an off-chain reader.** Paste a token address, render its policy. The
 value of enumerability is only realised once something reads it, and this is a

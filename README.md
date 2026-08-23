@@ -22,11 +22,17 @@ array is not merely *a* list of conditions. It is **all** of them.
 
 ## The claim
 
-> Beyond the token standard's own requirements — sufficient balance, valid
-> approval, non-zero recipient, receiver acceptance — the **only** conditions
-> under which one of these tokens can block a transfer are the rules
-> enumerated by `policy().rules()`. No other condition exists, and none can be
-> added without `swapDelay` seconds of public, on-chain notice.
+> For **every entry point** in one of these tokens — transfer, approve,
+> setApprovalForAll, mint, burn — beyond the standard's own requirements, the
+> only conditions under which it can fail are the rules enumerated by
+> `policy().rules()`. No other condition exists, and none can be added without
+> `swapDelay` seconds of public, on-chain notice.
+
+There is no carve-out. Each rule names the action it governs, so a policy is a
+table rather than a list, and `mint` is answerable on exactly the same terms as
+`transfer`. That matters more than the extra coverage suggests: a carve-out is
+where a claim goes to die, and the `burn(address,uint256)` confiscation hole
+this design once had lived inside precisely such an exemption.
 
 The strongest case is the empty one. A token whose rule array is empty is
 **unconditional**: nothing it can do will ever block your transfer.
@@ -86,10 +92,10 @@ Verification matches a token against a fixed, finite set of hashes:
 
 | Contract | Runtime size |
 |---|---|
-| `PolicyERC20` | 3,520 B |
-| `PolicyERC721` | 6,151 B |
-| `PolicyERC1155` | 6,407 B |
-| `PolicyEngine` | 6,677 B |
+| `PolicyERC20` | 4,945 B |
+| `PolicyERC721` | 7,858 B |
+| `PolicyERC1155` | 7,742 B |
+| `PolicyEngine` | 7,803 B |
 
 A wallet ships four constants and can then verify any token any issuer deploys,
 on any chain, forever, per version.
@@ -124,7 +130,42 @@ would give back exactly the property this design exists to provide.
 | `ExternalGate` | Defers to arbitrary code — the honest escape hatch |
 
 Rules are ANDed, flat, with no nesting: expressiveness traded for
-renderability. For ERC-1155 a rule may be `scoped` to a single token id.
+renderability. Each rule also names one **action** — `Transfer`, `Approve`,
+`SetOperator`, `Mint` or `Burn` — so the policy is a product of two finite
+dimensions rather than an open-ended program. For ERC-1155 a rule may also be
+`scoped` to a single token id.
+
+### The permanent envelope
+
+Not every kind is meaningful for every action, and several would *silently
+misbehave* rather than merely be useless — `HolderCap` on `Burn` sees
+`to == address(0)`, so it would fire on every burn for a reason unrelated to
+holder counts. Legality is therefore enforced inside the engine, by a `pure`
+function that is part of its canonical bytecode:
+
+```solidity
+function allowedKinds(Action a) public pure returns (uint256 bitmask);
+```
+
+Because it is canonical, a reader gets something the timelock cannot give them:
+
+> The timelock says no new **kind** can appear without notice.
+> This says these kinds can **never** apply to this action at all — regardless
+> of notice, for the life of the contract.
+
+So the unconditional case sharpens from *"no rules right now"* to *"no rules
+right now, and here is the finite envelope of everything that could ever be
+added."*
+
+| Kind | Transfer | Approve | SetOperator | Mint | Burn |
+|---|:--:|:--:|:--:|:--:|:--:|
+| `Allowlist` / `Blocklist` / `Frozen` | ● | ● | ● | ● | ● |
+| `LockupUntil` | ● | ● | ● | ● | ● |
+| `MaxTransfer` | ● | ● | | ● | ● |
+| `MaxBalance` / `MaxBalanceBps` | ● | | | ● | |
+| `MinHoldTime` | ● | ● | ● | | ● |
+| `HolderCap` | ● | | | ● | |
+| `ExternalGate` | ● | ● | ● | ● | ● |
 
 `ExternalGate` voids the strong claim by design, and
 `isFullyEnumerable()` returns false whenever one is present. `externalRefs()`
@@ -150,6 +191,11 @@ is strictly stronger than the freeze already refused: blocking a transfer stops
 you moving a token, burning takes it outright. For ERC-721 not even an approved
 operator may burn — approving a marketplace to sell an NFT must never be
 approval to destroy it.
+
+**No policy over de-risking.** Reducing an allowance and revoking an operator
+are structurally exempt: only *increases* and *grants* consult the policy. A
+rule able to stop you withdrawing an approval could pin you to it, which is a
+trap rather than a restriction.
 
 **No proxies, anywhere, ever.** A canonical proxy in front of a mutable
 implementation verifies clean and means nothing.
@@ -208,12 +254,19 @@ PolicyVerification.Report memory r = PolicyVerification.verify(token);
 r.tokenCanonical   // runs a member of the canonical set
 r.policyCanonical  // engine runs canonical PolicyEngine code
 r.standard         // which member matched
-r.rules            // the complete, exhaustive policy
+r.rules            // the complete, exhaustive policy, every action
+r.activeActions    // which entry points are gated at all
+r.allowedKindsBy   // per action, what could EVER gate it
 r.hasExternalGate  // arbitrary code is consulted
 r.externalRefs     // every address the policy consults
 r.swapDelay        // notice required before a rule change
 r.pendingAt        // a change is already queued
 ```
+
+`isUnconditionalFor(report, action)` answers the same question per entry point,
+so a collection that caps supply per wallet but never restricts secondary
+trading renders as *"transfers unconditional, minting restricted"* rather than
+collapsing to a single red badge.
 
 `verify()` is safe against untrusted input: `EXTCODEHASH` never invokes the
 target, and every codehash is established *before* any call is made to that
@@ -271,7 +324,7 @@ Foundry.
 
 ```bash
 forge build
-forge test          # 121 tests
+forge test          # 142 tests
 forge fmt --check
 ```
 
@@ -283,7 +336,9 @@ not a final feature set.
 Known rough edges: `Rule` is unpacked for legibility and could be packed;
 `evaluate()` is a linear scan, so gas grows with rule count; and the ERC-1155
 batch path consults the policy once per item, which is the honest price of a
-batch meaning exactly the same thing as the transfers it bundles.
+batch meaning exactly the same thing as the transfers it bundles. Gating the
+four non-transfer entry points costs each one a STATICCALL; an action no rule
+governs short-circuits on a single warm SLOAD inside the engine.
 
 The clearest next step is an off-chain reader — paste a token address, render
 its policy — since the value of enumerability is only realised once something

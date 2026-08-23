@@ -94,7 +94,12 @@ contract UnconditionalPolicyTest is Test {
 
         Rule[] memory lockup = new Rule[](1);
         lockup[0] = Rule({
-            kind: RuleKind.LockupUntil, value: block.timestamp + 999 days, ref: address(0), scoped: false, scopeId: 0
+            action: Action.Transfer,
+            kind: RuleKind.LockupUntil,
+            value: block.timestamp + 999 days,
+            ref: address(0),
+            scoped: false,
+            scopeId: 0
         });
 
         vm.prank(ADMIN);
@@ -115,8 +120,14 @@ contract UnconditionalPolicyTest is Test {
         PolicyEngine e = PolicyEngine(t20.policy());
 
         Rule[] memory lockup = new Rule[](1);
-        lockup[0] =
-            Rule({kind: RuleKind.LockupUntil, value: block.timestamp + 1, ref: address(0), scoped: false, scopeId: 0});
+        lockup[0] = Rule({
+            action: Action.Transfer,
+            kind: RuleKind.LockupUntil,
+            value: block.timestamp + 1,
+            ref: address(0),
+            scoped: false,
+            scopeId: 0
+        });
 
         vm.startPrank(ADMIN);
         e.proposeRules(lockup);
@@ -133,7 +144,9 @@ contract UnconditionalPolicyTest is Test {
         PolicyEngine e = PolicyEngine(t20.policy());
 
         Rule[] memory cap = new Rule[](1);
-        cap[0] = Rule({kind: RuleKind.MaxTransfer, value: 1, ref: address(0), scoped: false, scopeId: 0});
+        cap[0] = Rule({
+            action: Action.Transfer, kind: RuleKind.MaxTransfer, value: 1, ref: address(0), scoped: false, scopeId: 0
+        });
 
         vm.prank(ADMIN);
         e.proposeRules(cap);
@@ -211,6 +224,37 @@ contract UnconditionalPolicyTest is Test {
         } else {
             assertEq(t1155.balanceOf(from, id), SUPPLY, "self-transfer must not mint");
         }
+    }
+
+    /// The claim is total over the ABI, not scoped to transfers: for ALL
+    /// inputs, every OTHER entry point also settles on an unconditional token.
+    function testFuzz_unconditional_neverBlocksAnyAction(address who, address other, uint256 amount) public {
+        vm.assume(who != address(0) && other != address(0) && who != other);
+        amount = bound(amount, 1, SUPPLY);
+
+        vm.prank(ADMIN);
+        t20.mint(who, SUPPLY);
+
+        vm.startPrank(who);
+        assertTrue(t20.approve(other, amount), "approve must never be refused");
+        t20.burn(amount);
+        vm.stopPrank();
+
+        assertEq(t20.balanceOf(who), SUPPLY - amount);
+
+        (bool allowed,) = t20.canPerform(Action.Mint, ADMIN, address(0), other, amount);
+        assertTrue(allowed, "mint must never be refused");
+        (allowed,) = t20.canPerform(Action.Burn, who, who, address(0), amount);
+        assertTrue(allowed, "burn must never be refused");
+    }
+
+    /// Every action reports as unconditional, not just Transfer.
+    function test_CLAIM_everyActionIsUnconditional() public view {
+        PolicyVerification.Report memory r = PolicyVerification.verify(address(t20));
+        for (uint256 i; i < 5; ++i) {
+            assertTrue(PolicyVerification.isUnconditionalFor(r, Action(i)), "action must be ungated");
+        }
+        assertEq(PolicyEngine(t20.policy()).activeActions(), 0);
     }
 
     /// The admin is not privileged in either direction: it cannot block a

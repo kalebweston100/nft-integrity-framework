@@ -9,7 +9,7 @@ pragma solidity ^0.8.34;
 /**
  * @notice Identifies which token standard a canonical token implements.
  * @dev Returned by tokenStandard() on every member of the set, and carried in
- *      TransferContext so one PolicyEngine can serve all three. Lets an
+ *      ActionContext so one PolicyEngine can serve all three. Lets an
  *      integrator pick the right interface without trial-and-error detection,
  *      and tells a policy reader how to interpret `id` and `amount` in a rule.
  *

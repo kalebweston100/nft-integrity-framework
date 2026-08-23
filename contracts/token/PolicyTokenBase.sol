@@ -134,6 +134,30 @@ abstract contract PolicyTokenBase is IPolicyGoverned {
     }
 
     // =========================================================================
+    //                              THE ONLY GATE
+    // =========================================================================
+
+    /**
+     * @dev THE LOAD-BEARING CALL. Every entry point in every token below routes
+     *      its discretionary decision through here and nowhere else. A `revert`
+     *      anywhere in a token that is not a standard-conformance requirement
+     *      and not this call falsifies the claim in that token's NatSpec while
+     *      leaving every test green.
+     *
+     *      `evaluate` is `view`, so this is a STATICCALL: the engine cannot
+     *      write storage, emit, or reenter in any state-changing way, to
+     *      arbitrary subcall depth — including into any registry or external
+     *      gate a rule consults.
+     *
+     *      An action no rule governs returns on a single warm SLOAD inside the
+     *      engine, which is what keeps gating the cheap entry points cheap.
+     */
+    function _gate(ActionContext memory ctx) internal view {
+        (bool ok, string memory reason) = _policy.evaluate(ctx);
+        if (!ok) revert PolicyDenied(reason);
+    }
+
+    // =========================================================================
     //                                  ADMIN
     // =========================================================================
 

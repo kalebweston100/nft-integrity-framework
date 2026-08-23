@@ -87,6 +87,7 @@ contract PolicyEngine {
     error TimelockNotElapsed(uint256 effectiveAt);
     error RulesPending();
     error InvalidRule(uint256 index);
+    error KindNotAllowedForAction(uint256 index, Action action, RuleKind kind);
 
     event RulesProposed(Rule[] rules, uint256 effectiveAt);
     event RulesCommitted(Rule[] rules);
@@ -125,6 +126,14 @@ contract PolicyEngine {
     ///         ten rule kinds consults.
     bool public tracksHoldTime;
 
+    /// @notice Bitmap of actions that at least one active rule governs, indexed
+    ///         by `Action`. Cached so `evaluate` can return without scanning.
+    /// @dev    This is what keeps the four newly-gated entry points cheap. An
+    ///         ungated action costs one warm SLOAD and no array traversal, so a
+    ///         token with an unconditional policy pays almost nothing for being
+    ///         governed at all.
+    uint256 public activeActions;
+
     // =========================================================================
     //                                MODIFIERS
     // =========================================================================
@@ -152,6 +161,7 @@ contract PolicyEngine {
         admin = admin_;
         notifier = notifier_;
         swapDelay = swapDelay_;
+        _validate(rules_);
         _writeRules(_rules, rules_);
         _refreshCaches();
     }
@@ -168,6 +178,26 @@ contract PolicyEngine {
 
     function ruleCount() external view returns (uint256) {
         return _rules.length;
+    }
+
+    /// @notice The rules governing one entry point.
+    /// @dev    A convenience over rules(); the flat array remains the complete
+    ///         policy and the thing to hash or diff.
+    function rulesFor(Action a) external view returns (Rule[] memory subset) {
+        uint256 n = _rules.length;
+        uint256 count;
+        for (uint256 i; i < n; ++i) {
+            if (_rules[i].action == a) ++count;
+        }
+
+        subset = new Rule[](count);
+        uint256 j;
+        for (uint256 i; i < n; ++i) {
+            if (_rules[i].action == a) {
+                subset[j] = _rules[i];
+                ++j;
+            }
+        }
     }
 
     /// @notice The pending policy and when it becomes committable.
@@ -228,17 +258,89 @@ contract PolicyEngine {
     }
 
     // =========================================================================
+    //                        THE PERMANENT ENVELOPE
+    // =========================================================================
+
+    /**
+     * @notice Which rule kinds may EVER apply to `a`, as a bitmask indexed by
+     *         RuleKind.
+     *
+     * @dev `pure`, so this lives in canonical bytecode and a reader need not
+     *      trust an off-chain table. That makes it a claim the timelock cannot
+     *      make:
+     *
+     *          The timelock says no new KIND can appear without notice.
+     *          This says these kinds can never apply to this action AT ALL,
+     *          regardless of notice, for the life of the contract.
+     *
+     *      It also sharpens the unconditional case from "no rules right now" to
+     *      "no rules right now, and here is the finite envelope of everything
+     *      that could ever be added."
+     *
+     *      The exclusions are not tidiness. Several kinds would SILENTLY
+     *      MISBEHAVE rather than merely be useless:
+     *
+     *        HolderCap on Burn      `to` is address(0), so `toBalance` is 0 and
+     *                               the rule fires on every burn, denying it
+     *                               for a reason unrelated to holder counts.
+     *        MaxBalance on Burn     compares against the zero address balance,
+     *                               quietly behaving as a MaxTransfer.
+     *        MinHoldTime on Mint    reads lastReceived[address(0)], never set.
+     *
+     *      A rule that means something other than its name is worse than one
+     *      that is refused, so these are rejected at propose time.
+     *
+     *      Identity rules and the escape hatch apply everywhere. Quantity rules
+     *      apply only where a quantity is meaningful — MaxTransfer on Approve
+     *      is an allowance cap, MinHoldTime on Approve or SetOperator is an
+     *      anti-sniping rule: both unusual, both coherent.
+     */
+    function allowedKinds(Action a) public pure returns (uint256) {
+        uint256 identity = _bit(RuleKind.Allowlist) | _bit(RuleKind.Blocklist) | _bit(RuleKind.Frozen)
+            | _bit(RuleKind.LockupUntil) | _bit(RuleKind.ExternalGate);
+
+        if (a == Action.Transfer) {
+            return identity | _bit(RuleKind.MaxTransfer) | _bit(RuleKind.MaxBalance) | _bit(RuleKind.MaxBalanceBps)
+                | _bit(RuleKind.MinHoldTime) | _bit(RuleKind.HolderCap);
+        }
+        if (a == Action.Approve) {
+            return identity | _bit(RuleKind.MaxTransfer) | _bit(RuleKind.MinHoldTime);
+        }
+        if (a == Action.SetOperator) {
+            return identity | _bit(RuleKind.MinHoldTime);
+        }
+        if (a == Action.Mint) {
+            return identity | _bit(RuleKind.MaxTransfer) | _bit(RuleKind.MaxBalance) | _bit(RuleKind.MaxBalanceBps)
+                | _bit(RuleKind.HolderCap);
+        }
+        // Action.Burn
+        return identity | _bit(RuleKind.MaxTransfer) | _bit(RuleKind.MinHoldTime);
+    }
+
+    function _bit(RuleKind k) private pure returns (uint256) {
+        return 1 << uint256(k);
+    }
+
+    // =========================================================================
     //                               EVALUATION
     // =========================================================================
 
-    /// @notice Evaluate the policy against a pending transfer.
+    /// @notice Evaluate the policy against a pending action.
     /// @dev    `view`, so it can never mutate state — the deny gate is
     ///         STATICCALL-enforced end to end. Rules are ANDed; the first
     ///         failure short-circuits and names itself.
-    function evaluate(TransferContext calldata ctx) public view returns (bool ok, string memory reason) {
+    ///
+    ///         Returns immediately for an action no rule governs, so the four
+    ///         entry points beyond Transfer cost one warm SLOAD when ungated.
+    function evaluate(ActionContext calldata ctx) public view returns (bool ok, string memory reason) {
+        if (activeActions & (1 << uint256(ctx.action)) == 0) return (true, "");
+
         uint256 n = _rules.length;
         for (uint256 i; i < n; ++i) {
             Rule storage r = _rules[i];
+
+            // A rule governs exactly one entry point.
+            if (r.action != ctx.action) continue;
 
             // ERC-1155: a scoped rule applies only to its own token id.
             if (r.scoped && r.scopeId != ctx.id) continue;
@@ -249,7 +351,7 @@ contract PolicyEngine {
         return (true, "");
     }
 
-    function _evaluateOne(Rule storage r, TransferContext calldata ctx) private view returns (bool, string memory) {
+    function _evaluateOne(Rule storage r, ActionContext calldata ctx) private view returns (bool, string memory) {
         RuleKind k = r.kind;
 
         if (k == RuleKind.Allowlist) {
@@ -337,7 +439,7 @@ contract PolicyEngine {
     /// @dev    MinHoldTime needs writable state, and `evaluate` is `view`, so
     ///         the write happens here — on the existing after-transfer hook,
     ///         adding no new call path and no reverse call into the token.
-    function recordTransfer(TransferContext calldata ctx) external onlyNotifier {
+    function recordTransfer(ActionContext calldata ctx) external onlyNotifier {
         if (!tracksHoldTime) return;
         if (ctx.to != address(0) && ctx.amount > 0) {
             lastReceived[ctx.to] = block.timestamp;
@@ -398,17 +500,31 @@ contract PolicyEngine {
     //                              INTERNAL
     // =========================================================================
 
-    /// @dev Rejects rules whose parameters could never be satisfied or whose
-    ///      registry is unset — a malformed rule would otherwise deny every
+    /// @dev Applied to the launch policy as well as to every proposal — an
+    ///      issuer must not be able to deploy with a rule that could never be
+    ///      proposed. Rejects rules whose parameters could never be satisfied or
+    ///      whose registry is unset — a malformed rule would otherwise deny every
     ///      transfer with a confusing reason, or revert on a call to address(0).
-    function _validate(Rule[] calldata newRules) private pure {
+    function _validate(Rule[] memory newRules) private pure {
         for (uint256 i; i < newRules.length; ++i) {
-            RuleKind k = newRules[i].kind;
+            Rule memory r = newRules[i];
+            RuleKind k = r.kind;
+
+            // The permanent envelope: this kind may never govern this action.
+            if (allowedKinds(r.action) & _bit(k) == 0) revert KindNotAllowedForAction(i, r.action, k);
+
             bool needsRef = k == RuleKind.Allowlist || k == RuleKind.Blocklist || k == RuleKind.Frozen
                 || k == RuleKind.ExternalGate;
 
-            if (needsRef && newRules[i].ref == address(0)) revert InvalidRule(i);
-            if (k == RuleKind.MaxBalanceBps && newRules[i].value > 10_000) revert InvalidRule(i);
+            // Field schema, enforced. Unused fields MUST be zero so two engines
+            // holding the same logical policy return byte-identical rules() -
+            // canonical encoding, not stylistic tidiness.
+            if (needsRef) {
+                if (r.ref == address(0) || r.value != 0) revert InvalidRule(i);
+            } else {
+                if (r.ref != address(0)) revert InvalidRule(i);
+            }
+            if (k == RuleKind.MaxBalanceBps && r.value > 10_000) revert InvalidRule(i);
         }
     }
 
@@ -418,14 +534,14 @@ contract PolicyEngine {
     ///      commits.
     function _refreshCaches() private {
         bool tracks;
+        uint256 actions;
         uint256 n = _rules.length;
         for (uint256 i; i < n; ++i) {
-            if (_rules[i].kind == RuleKind.MinHoldTime) {
-                tracks = true;
-                break;
-            }
+            if (_rules[i].kind == RuleKind.MinHoldTime) tracks = true;
+            actions |= 1 << uint256(_rules[i].action);
         }
         tracksHoldTime = tracks;
+        activeActions = actions;
     }
 
     /// @dev `delete` cannot be applied to a storage-pointer parameter, so the
