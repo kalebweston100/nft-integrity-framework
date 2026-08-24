@@ -243,6 +243,17 @@ cannot make: `allowedKinds` is `pure` and therefore canonical, so a reader
 learns the permanent envelope of what could *ever* gate an action, not merely
 what gates it today.
 
+**Queued for the next rewrite of the verification layer:**
+
+- **Assert the token/engine pairing explicitly.** `PolicyVerification` checks
+  both codehashes and that `token.policy()` names the engine, but never that
+  `engine.notifier() == token`. Redundant today, because a canonical token
+  necessarily deployed its own engine and a borrowed-engine impostor is inert —
+  `recordTransfer` is notifier-gated and the transfer path calls it
+  unconditionally. Worth adding anyway: it makes the report state the pairing
+  rather than leaving a reader to infer it, and it is the exact check that
+  replaces the structural guarantee if deployment is ever decoupled (below).
+
 **Then: an off-chain reader.** Paste a token address, render its policy. The
 value of enumerability is only realised once something reads it, and this is a
 UI problem rather than a contract problem — see §3.4.
