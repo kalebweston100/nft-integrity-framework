@@ -12,10 +12,11 @@ import "../hooks/HooksERC721.sol";
  *   beforeTransfer  – recorded; optional revert to test transfer blocking
  *   beforeMint      – recorded; optional (false, reason) to test mint blocking
  *   beforeBurn      – recorded; optional (false, reason) to test burn blocking
+ *   validateTransfer – per-recipient denylist via _onValidateTransfer
  *   hookMint path      – issuerMint() exercises IntegrityERC721.hookMint()
  *
  * LIMITATIONS:
- *   validateTransfer, afterTransfer, afterMint, afterBurn,
+ *   afterTransfer, afterMint, afterBurn,
  *   beforeSetBaseURI, afterSetBaseURI, onTransferBlocked are not virtual in
  *   HooksERC721 and cannot be overridden; test those paths via token-side effects.
  */
@@ -54,6 +55,9 @@ contract TestHooksERC721 is HooksERC721 {
     bool public blockBurns;
     string public blockBurnReason = "TestHooks: burn blocked";
 
+    /// @notice Recipients that _onValidateTransfer refuses to send tokens to.
+    mapping(address => bool) public blockedRecipients;
+
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     constructor(
@@ -84,6 +88,10 @@ contract TestHooksERC721 is HooksERC721 {
         blockBurnReason = reason;
     }
 
+    function setBlockedRecipient(address account, bool blocked) external onlyIssuerAdmin {
+        blockedRecipients[account] = blocked;
+    }
+
     /// @notice Exercises IntegrityERC721.hookMint() — direct hook-gated mint by tokenId.
     function issuerMint(address to, uint256 tokenId, uint256 flags, bytes32 metadataHash) external onlyIssuerAdmin {
         _mintFromHooks(to, tokenId, flags, metadataHash);
@@ -94,6 +102,11 @@ contract TestHooksERC721 is HooksERC721 {
     function _onBeforeTransfer(address from, address to, uint256 tokenId) internal override {
         beforeTransferLog.push(TransferRecord(from, to, tokenId));
         if (revertOnTransfer) revert(transferRevertReason);
+    }
+
+    function _onValidateTransfer(address, address to, uint256) internal view override returns (bool, string memory) {
+        if (blockedRecipients[to]) return (false, "TestHooks: recipient blocked");
+        return (true, "");
     }
 
     function _onBeforeMint(

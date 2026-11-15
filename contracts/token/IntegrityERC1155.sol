@@ -147,7 +147,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         whenNotPaused
     {
         if (from != msg.sender && !_operatorApprovals[from][msg.sender]) revert NotOwnerOrApproved();
-        _transferPipeline1155(from, to, id, amount);
+        _transferPipeline1155(from, to, id, amount, true);
         _checkOnERC1155Received(msg.sender, from, to, id, amount, data);
     }
 
@@ -164,12 +164,13 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         if (ids.length != amounts.length) revert LengthMismatch();
 
         for (uint256 i = 0; i < ids.length; i++) {
-            _transferPipeline1155(from, to, ids[i], amounts[i]);
+            _transferPipeline1155(from, to, ids[i], amounts[i], false);
         }
 
-        // EIP-1155 standard: emit TransferBatch as a summary event for ecosystem tooling.
-        // Individual TransferSingle events are already emitted per-item inside
-        // _transferPipeline1155.
+        // EIP-1155: a batch transfer is reported by exactly one TransferBatch event.
+        // The per-item pipeline calls above deliberately do NOT emit TransferSingle —
+        // emitting both would make indexers that sum transfer events count every
+        // item in the batch twice.
         emit TransferBatch(msg.sender, from, to, ids, amounts);
 
         _checkOnERC1155BatchReceived(msg.sender, from, to, ids, amounts, data);
@@ -185,7 +186,9 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     //                   TRANSFER PIPELINE (private, locked)
     // =========================================================================
 
-    function _transferPipeline1155(address from, address to, uint256 id, uint256 amount) private {
+    /// @param emitSingle Whether to emit TransferSingle for this item. False when called
+    ///                   from safeBatchTransferFrom, which emits one TransferBatch instead.
+    function _transferPipeline1155(address from, address to, uint256 id, uint256 amount, bool emitSingle) private {
         // [LOCKED] Sufficient balance check
         if (amount == 0) revert ZeroAmount();
         if (_balances[id][from] < amount) revert InsufficientBalance();
@@ -203,7 +206,7 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
         _balances[id][from] -= amount;
         _balances[id][to] += amount;
         _updateAggregateBalances(from, to, amount);
-        emit TransferSingle(msg.sender, from, to, id, amount);
+        if (emitSingle) emit TransferSingle(msg.sender, from, to, id, amount);
 
         // [LOCKED] Per-token holder tracking
         if (toWasNewHolder && _balances[id][to] > 0) {
@@ -245,6 +248,10 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
     {
         _mintLogic(msg.sender, to, id, amount, flags, metaHash, data);
         _totalSupply += amount;
+
+        // EIP-1155 requires the receiver acceptance check on mints too, not only on
+        // transfers. Done last, after all state changes, under nonReentrant.
+        _checkOnERC1155Received(msg.sender, address(0), to, id, amount, data);
     }
 
     /// @notice Batch mint tokens across multiple ids. Only callable by issuer admin.
@@ -295,6 +302,9 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
                 emit HookCallFailed("afterMint1155", failReason);
             }
         }
+
+        // EIP-1155 receiver acceptance check for the whole batch.
+        _checkOnERC1155BatchReceived(msg.sender, address(0), to, ids, amounts, data);
     }
 
     /// @notice Burn tokens with holder tracking. Only callable by issuer admin.
@@ -504,6 +514,9 @@ contract IntegrityERC1155 is IERC1155, IHookMintERC1155, IFlaggedToken, Integrit
             emit HookCallFailed("afterMint1155", reason);
         }
         _inHookMint = false;
+
+        // EIP-1155 receiver acceptance check (operator is the hooks contract).
+        _checkOnERC1155Received(msg.sender, address(0), to, id, amount, "");
     }
 
     /// @notice Set a per-token-ID URI initiated by the hooks contract.

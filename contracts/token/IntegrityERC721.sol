@@ -96,6 +96,10 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
     mapping(uint256 => uint256) private _flags;
     /// @dev Per-token committed metadata hash. [LOCKED] written once, at mint, never again.
     mapping(uint256 => bytes32) private _metadataHash;
+    /// @dev Whether a tokenId has ever been minted (and so had its flags committed).
+    ///      Never cleared — not even by burn — so a burned tokenId can never be
+    ///      re-minted with a different flag/metadata commitment.
+    mapping(uint256 => bool) private _flagsCommitted;
 
     // =========================================================================
     //                     ERC-2981 ROYALTY STORAGE
@@ -151,7 +155,12 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         _checkOnERC721Received(from, to, tokenId, "");
     }
 
-    function safeTransferFrom(address from, address to, uint256 tokenId, bytes calldata data) external override {
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes calldata data)
+        external
+        override
+        whenNotPaused
+        nonReentrant
+    {
         if (!_isApprovedOrOwner(msg.sender, tokenId)) revert NotOwnerOrApproved();
         _transferPipeline721(from, to, tokenId);
         _checkOnERC721Received(from, to, tokenId, data);
@@ -193,14 +202,18 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
         _owners[tokenId] = to;
         emit Transfer(from, to, tokenId);
 
-        // [LOCKED] Holder tracking
-        if (_balances[to] == 1) {
-            _holderCount++;
-            emit HolderAdded(to, _holderCount);
-        }
-        if (_balances[from] == 0) {
-            _holderCount--;
-            emit HolderRemoved(from, _holderCount);
+        // [LOCKED] Holder tracking. A self-transfer leaves the holder set unchanged,
+        // so it must not touch the count (otherwise a single-token holder sending to
+        // themselves would be counted twice).
+        if (from != to) {
+            if (_balances[to] == 1) {
+                _holderCount++;
+                emit HolderAdded(to, _holderCount);
+            }
+            if (_balances[from] == 0) {
+                _holderCount--;
+                emit HolderRemoved(from, _holderCount);
+            }
         }
 
         // [HOOKS - external call, safe] Developer's post-transfer logic
@@ -287,16 +300,26 @@ contract IntegrityERC721 is IERC721, IHookMintERC721, IFlaggedToken, IntegrityTo
 
     function _mintChecks(address to, uint256 tokenId) private view {
         if (to == address(0)) revert ZeroAddress();
-        if (_owners[tokenId] != address(0)) revert TokenAlreadyMinted();
+        // _flagsCommitted is never cleared, so this also rejects re-minting a burned
+        // tokenId — which would otherwise let the issuer rewrite its committed flags.
+        if (_flagsCommitted[tokenId]) revert TokenAlreadyMinted();
     }
 
     /// @dev [LOCKED] Commits a token's flag bitmap and metadata hash. Only ever called
     ///      once per tokenId, from mint/hookMint — no other function writes these mappings.
     function _commitFlags(uint256 tokenId, uint256 flags, bytes32 metaHash) private {
+        if (_flagsCommitted[tokenId]) revert FlagsAlreadyCommitted();
         if (flags & ~_definedFlagsMask != 0) revert UndefinedFlagBits();
+        _flagsCommitted[tokenId] = true;
         _flags[tokenId] = flags;
         _metadataHash[tokenId] = metaHash;
         emit FlagsCommitted(tokenId, flags, metaHash);
+    }
+
+    /// @notice Whether `tokenId` has ever been minted. Stays true after a burn: a
+    ///         burned tokenId is retired permanently and can never be re-minted.
+    function flagsCommitted(uint256 tokenId) external view returns (bool) {
+        return _flagsCommitted[tokenId];
     }
 
     function _mintBalanceUpdate(address to, uint256 tokenId) private {

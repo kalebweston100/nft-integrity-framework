@@ -24,3 +24,9 @@ remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
     "forge-std/=lib/forge-std/src/",
 ]
+
+[invariant]
+runs = 128
+depth = 64
+# Handlers bound every input to a valid action, so any revert inside one is a bug.
+fail_on_revert = true

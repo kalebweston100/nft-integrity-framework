@@ -14,7 +14,7 @@ token exactly once at mint, that a buyer can verify trustlessly before
 purchase — no reliance on marketplace metadata or seller claims.
 
 > **Status: early / pre-audit.** The contracts below are implemented and
-> internally consistent, but there is no test suite, no CI, and no security
+> covered by unit and invariant tests in CI, but there has been no security
 > review yet. Do not deploy real value on top of this until that changes.
 
 ## Distribution model
@@ -89,6 +89,21 @@ non-zero address — the token only ever exists because that address called
 storage already tells you who governs it, and `Codehash.isCanonical(...)`
 (see below) tells you whether the token itself is running unmodified code,
 independent of which hooks contract deployed it.
+
+**What a canonical codehash does *not* tell you.** It proves the token's own
+code is unmodified. It says nothing about the issuer or the hooks contract,
+and both still hold real power over holders:
+
+- The **issuer admin** can pause all transfers, burn any holder's tokens,
+  change token URIs, and set royalties.
+- The **hooks contract** runs arbitrary developer code. Its `before*` and
+  `validate*` hooks can deny any transfer, so a malicious hooks contract can
+  let the issuer sell tokens while blocking buyers from ever reselling them.
+
+Before buying, check who the issuer admin is and read (or verify the
+published hash of) the hooks contract at `token.hooksContract()`. Flags and
+metadata commitments remain trustworthy either way: no one, including the
+issuer or the hooks contract, can change them after mint.
 
 ## Core concepts
 
@@ -245,6 +260,12 @@ forge fmt --check    # verify formatting matches CI
 CI (`.github/workflows/ci.yml`) runs `forge build`, `forge test`,
 `forge fmt --check`, and a Slither static-analysis pass on every push and
 pull request.
+
+`forge test` runs both the unit tests in `test/` and the stateful invariant
+tests in `test/invariant/`. The invariant handlers drive random sequences of
+mints, transfers, burns and re-mint attempts and check, after every step,
+that committed flags never change, burned ERC-721 ids are never re-minted,
+holder counts match actual holders, and balances add up to supply.
 
 ## What's not there yet
 

@@ -20,7 +20,8 @@ import "../interfaces/IHooksERC721.sol";
  *      synchronously, as the return value of `new`.
  *
  * EXTENSION:
- *   Override _onBeforeTransfer / _onBeforeMint / _onBeforeBurn for custom logic.
+ *   Override _onBeforeTransfer / _onValidateTransfer / _onBeforeMint / _onBeforeBurn
+ *   for custom logic.
  *   After-hooks are wrapped in try/catch by the token — bugs won't brick the token.
  *
  * HOOK EXECUTION ORDER:
@@ -97,6 +98,13 @@ abstract contract HooksERC721 is IHooksERC721, ERC165 {
         onlyToken
         returns (bool valid, string memory reason)
     {
+        return _onValidateTransfer(from, to, tokenId);
+    }
+
+    /// @notice Override to deny transfers by policy (allowlists, lockups, etc.). Return
+    ///         (false, reason) to block; the token reverts with `reason`. Read-only —
+    ///         also used by the token's canTransfer() view.
+    function _onValidateTransfer(address, address, uint256) internal view virtual returns (bool, string memory) {
         return (true, "");
     }
 
