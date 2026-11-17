@@ -1,5 +1,5 @@
 {
-    "filter_paths": "lib/",
+    "filter_paths": "(lib/|test/)",
     "exclude_dependencies": true,
     "foundry_out_directory": "out"
 }

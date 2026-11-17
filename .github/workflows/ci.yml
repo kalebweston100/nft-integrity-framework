@@ -12,7 +12,7 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -31,19 +31,16 @@ jobs:
   slither:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-
-      - name: Build (for Slither's compiled-artifact analysis)
-        run: forge build
-
+      # Slither runs in its own container and needs Foundry inside it. The
+      # action only installs Foundry when the target directory contains
+      # foundry.toml, so the target must be the project root, not contracts/.
       - name: Run Slither
         uses: crytic/slither-action@v0.4.0
         with:
-          target: 'contracts'
+          target: '.'
           slither-config: 'slither.config.json'
           fail-on: none
