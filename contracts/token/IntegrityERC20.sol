@@ -159,8 +159,8 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
     // =========================================================================
 
     function _transferPipeline(address from, address to, uint256 amount) private {
-        // [LOCKED] Sufficient balance check
-        if (amount == 0) revert ZeroAmount();
+        // [LOCKED] Sufficient balance check. Zero-value transfers are allowed and run
+        // the full pipeline (hooks + Transfer event), as EIP-20 requires.
         if (_balances[from] < amount) revert InsufficientBalance();
         if (to == address(0)) revert ZeroAddress();
 
@@ -174,16 +174,19 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         _balances[to] += amount;
         emit Transfer(from, to, amount);
 
-        // [LOCKED] Holder tracking
-        if (_firstReceivedAt[to] == 0) {
-            _firstReceivedAt[to] = block.timestamp;
-            _holderCount++;
-            emit HolderAdded(to, _holderCount);
-        }
-        if (_balances[from] == 0) {
-            delete _firstReceivedAt[from];
-            _holderCount--;
-            emit HolderRemoved(from, _holderCount);
+        // [LOCKED] Holder tracking. A holder is an address with a non-zero balance, so
+        // only a non-zero transfer can add or remove one.
+        if (amount != 0) {
+            if (_firstReceivedAt[to] == 0) {
+                _firstReceivedAt[to] = block.timestamp;
+                _holderCount++;
+                emit HolderAdded(to, _holderCount);
+            }
+            if (_balances[from] == 0) {
+                delete _firstReceivedAt[from];
+                _holderCount--;
+                emit HolderRemoved(from, _holderCount);
+            }
         }
 
         // [HOOKS - external call, safe] Developer's post-transfer logic
@@ -240,7 +243,9 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         _totalSupply -= amount;
         emit Transfer(from, address(0), amount);
 
-        if (_balances[from] == 0) {
+        // Only a non-zero burn that empties the balance removes a holder; burning 0
+        // from an address that never held tokens must not decrement holderCount.
+        if (amount != 0 && _balances[from] == 0) {
             delete _firstReceivedAt[from];
             _holderCount--;
             emit HolderRemoved(from, _holderCount);
@@ -339,6 +344,7 @@ contract IntegrityERC20 is IERC20, IHookMintERC20, IntegrityTokenBase {
         returns (bool allowed, string memory reason)
     {
         if (_isPaused()) return (false, "Token is paused");
+        if (to == address(0)) return (false, "Zero address");
         if (_balances[from] < amount) return (false, "Insufficient balance");
         (bool valid, string memory validationReason) = _hooks.validateTransfer(from, to, amount);
         if (!valid) return (false, validationReason);

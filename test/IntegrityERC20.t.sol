@@ -149,4 +149,78 @@ contract IntegrityERC20Test is Fixtures {
 
         assertEq(token.balanceOf(alice), 50);
     }
+
+    // ─── Regressions: zero-value transfers and holder tracking ──────────────
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    /// @dev EIP-20: "Transfers of 0 values MUST be treated as normal transfers and
+    ///      fire the Transfer event." Previously reverted with ZeroAmount.
+    function test_transfer_zeroAmountIsANormalTransfer() public {
+        (TestHooksERC20 hooks, IntegrityERC20 token) = _deployERC20(issuer);
+        vm.prank(issuer);
+        token.mint(alice, 100, "");
+
+        vm.expectEmit(address(token));
+        emit Transfer(alice, bob, 0);
+        vm.prank(alice);
+        assertTrue(token.transfer(bob, 0));
+
+        assertEq(token.balanceOf(alice), 100);
+        assertEq(token.balanceOf(bob), 0);
+        assertEq(hooks.beforeTransferCount(), 1, "hooks still run on zero-value transfers");
+        // A zero-value transfer must not make the recipient a holder.
+        assertEq(token.holderCount(), 1);
+        assertEq(token.firstReceivedAt(bob), 0);
+    }
+
+    function test_transfer_zeroAmountFromNonHolderDoesNotDriftHolderCount() public {
+        (, IntegrityERC20 token) = _deployERC20(issuer);
+        vm.prank(issuer);
+        token.mint(alice, 100, "");
+
+        // bob holds nothing; sending 0 must not decrement holderCount on his behalf.
+        vm.prank(bob);
+        token.transfer(alice, 0);
+        assertEq(token.holderCount(), 1);
+    }
+
+    function test_transferFrom_zeroAmountWithoutAllowanceSucceeds() public {
+        (, IntegrityERC20 token) = _deployERC20(issuer);
+        vm.prank(issuer);
+        token.mint(alice, 100, "");
+
+        vm.prank(bob);
+        assertTrue(token.transferFrom(alice, bob, 0));
+        assertEq(token.holderCount(), 1);
+    }
+
+    /// @dev Previously burn(nonHolder, 0) passed the balance check and then
+    ///      decremented holderCount for an address that was never a holder.
+    function test_burn_zeroFromNonHolderDoesNotDriftHolderCount() public {
+        (, IntegrityERC20 token) = _deployERC20(issuer);
+        vm.prank(issuer);
+        token.mint(alice, 100, "");
+
+        vm.prank(issuer);
+        token.burn(bob, 0);
+        assertEq(token.holderCount(), 1);
+
+        // With no holders left, the old code underflowed and reverted instead.
+        vm.prank(issuer);
+        token.burn(alice, 100);
+        assertEq(token.holderCount(), 0);
+        vm.prank(issuer);
+        token.burn(bob, 0);
+        assertEq(token.holderCount(), 0);
+    }
+
+    function test_canTransfer_rejectsZeroAddressRecipient() public {
+        (, IntegrityERC20 token) = _deployERC20(issuer);
+        vm.prank(issuer);
+        token.mint(alice, 100, "");
+
+        (bool allowed,) = token.canTransfer(alice, address(0), 1);
+        assertFalse(allowed);
+    }
 }
