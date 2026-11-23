@@ -1,176 +1,110 @@
 # Integrity Token Framework
 
-A Solidity framework for deploying ERC-20 / ERC-721 / ERC-1155 tokens with a
-locked, non-bypassable transfer pipeline and an external "hooks" contract
-that lets a developer bolt on custom logic without ever gaining the ability
-to override core guarantees. There is no factory: a developer deploys their
-own hooks contract, and that contract's constructor deploys its token
-directly, as the return value of `new` — one deployment, one transaction, no
-intermediary.
+[![CI](https://github.com/kalebweston100/nft-integrity-framework/actions/workflows/ci.yml/badge.svg)](https://github.com/kalebweston100/nft-integrity-framework/actions/workflows/ci.yml)
 
-NFTs (ERC-721 / ERC-1155) additionally carry an on-chain **flags** system:
-an append-only registry of trait/certification labels, committed to each
-token exactly once at mint, that a buyer can verify trustlessly before
-purchase — no reliance on marketplace metadata or seller claims.
+ERC-20 / ERC-721 / ERC-1155 tokens whose transfer pipeline cannot be changed
+by the code that customizes them. Developers add logic through a separate
+**hooks contract** that the token calls with plain `CALL`, never
+`DELEGATECALL`, so a hook can veto a transfer but can never touch balances,
+ownership, or flags. NFTs also carry **flags**: certification bits and a
+metadata hash committed once at mint, which a buyer can check with one view
+call before purchase.
 
-> **Status: early / pre-audit.** The contracts below are implemented and
-> covered by unit and invariant tests in CI, but there has been no security
-> review yet. Do not deploy real value on top of this until that changes.
+> **Status: pre-audit.** Implemented and covered by unit, fuzz, and invariant
+> tests in CI, with Slither in the pipeline. No security review yet. Do not
+> put real value on it.
 
-## Distribution model
+## At a glance
 
-This project is a source library, like OpenZeppelin Contracts — not a
-hosted service. There is no canonical deployment maintained by anyone, no
-admin key held by the framework's authors, and no on-chain registry to keep
-up. Each developer compiles the contracts and deploys their **own** hooks
-contract (inheriting `HooksERC20`/`721`/`1155`), which deploys and owns its
-own token outright. What travels with a release
-is the source and the token contracts' canonical bytecode hash, so anyone
-can independently confirm a given token deployment is genuine — see
-"Verifying a deployment" below.
+- **Locked pipeline.** `transfer`, `mint`, `burn` are non-virtual on concrete
+  token contracts. Nobody, including the issuer, can redefine what a transfer is.
+- **Hooks can only restrict.** `before*` / `validate*` hooks can deny an
+  action; `after*` hooks run in `try/catch`, so a buggy hook cannot brick the token.
+- **Immutable NFT flags.** `defineFlag(bit, label)` is append-only; flags and
+  metadata hash are written once at mint and never again.
+  `verifyToken(id, requiredFlags, expectedMetadataHash)` checks both.
+- **One deployment, no factory.** A hooks contract's constructor deploys its
+  own token with `new`. No registry, no initializer, no window where the two
+  exist unwired.
+- **One codehash per token version.** Tokens hold no `immutable` state, so
+  every deployment of a token version has identical runtime bytecode and can
+  be checked against one published hash. See [what that does and does not
+  prove](#threat-model-and-limits).
 
 ## Why
 
-Most "compliance hook" or "extension point" patterns for tokens give the
-extension full access to token storage, which means a badly written or
-malicious hook can bypass the very rules it was meant to enforce. This
-framework inverts that: the token contract owns all state and the transfer
-pipeline; the hooks contract is a separate deployment that the token calls
-externally and can only **add** restrictions (return `false` from a
-`validate*` call) — it has no path to mutate balances, ownership, or the
-flags registry directly.
+The usual ways to make a token extensible (Diamond facets, Safe-style modules)
+run extension code via `delegatecall` inside the host's storage. A buggy or
+malicious module does not just say yes or no; it can write anything. This
+framework makes non-authority a property of the calling convention: the token
+owns all state and calls hooks externally at fixed points.
 
-The common way projects add third-party extensibility to a token — Diamond
-facets, Safe-style modules — wires the extension in via `delegatecall`, so
-the extension runs inside the *host's own* storage context. That's a large
-share of why module-related exploits happen: a buggy or malicious module
-doesn't just get to say yes/no, it gets to touch everything. This framework
-instead makes non-authority a property of the calling convention itself —
-plain external `CALL`, never `DELEGATECALL` — not something enforced by
-review discipline. The closest prior art, ERC-1404 ("Simple Restricted
-Token"), gets partway there but puts the restriction logic inside the token
-contract itself — there's no separate deployment and nothing stopping the
-token author from having that same function quietly mutate balances on the
-side. ERC-3643's compliance modules are closer but are typically routed
-through one trusted `Compliance` contract, not a pattern that pins down
-`CALL`-only invocation or requires ERC-165 discovery of conformance the way
-`HooksERC20`/`721`/`1155` do (see "Core concepts" below).
+Prior art gets partway there. ERC-1404 puts restriction logic inside the token
+itself, with nothing stopping that function from also mutating balances.
+ERC-3643 compliance modules are closer but usually route through one trusted
+`Compliance` contract and do not pin down `CALL`-only invocation or ERC-165
+discovery of conformance.
 
 ## Architecture
 
 ```
-Hooks (developer-deployed, inherits HooksERC20/721/1155)
-   │  - constructor deploys the token directly via `new` and stores the
-   │    returned address as `token` (immutable on the hooks side — hooks
-   │    contracts carry per-developer state anyway, so there was never
-   │    going to be one universal hash for them)
-   │  - issuerAdmin, custom validate/before/after logic
+Hooks contract (developer-deployed, inherits HooksERC20 / 721 / 1155)
+   │  issuerAdmin, custom before / validate / after logic
    │
-   │ `new`, synchronously, inside the hooks constructor — no separate
-   │ initialization step, no window where hooks exists but isn't wired
+   │  `new IntegrityERC*(...)` inside the hooks constructor
    ▼
 Token (IntegrityERC20 / IntegrityERC721 / IntegrityERC1155)
-   - owns all balance/ownership/flags storage
-   - transfer/mint/burn entry points are non-virtual (locked)
-   - reads its governing hooks address from msg.sender at construction
-     time (the deploying contract — unspoofable) and stores it in a plain,
-     setter-less slot, deliberately NOT immutable — see "Verifying a
-     deployment" for why that matters
-   ▲
-   │ external call, at fixed points in the pipeline
-   └─ Hooks: beforeX / validateX → can block (require true / non-empty
-      reason); afterX → wrapped in try/catch by the token, so a hook bug
-      can't brick the token
+   │  owns all balances, ownership, flags; pipeline is non-virtual
+   │  stores its hooks address (msg.sender at construction) in a
+   │  setter-less storage slot, not an immutable, so bytecode is identical
+   │  across deployments
+   │
+   └─► external CALL at fixed points:
+         pause → before → validate → state change → after (try/catch)
 ```
 
-**Trust surface:** `token.hooksContract()` always returns a real,
-non-zero address — the token only ever exists because that address called
-`new` on it. There's no separate registry to consult: the token's own
-storage already tells you who governs it, and `Codehash.isCanonical(...)`
-(see below) tells you whether the token itself is running unmodified code,
-independent of which hooks contract deployed it.
+Each hooks base implements a small ERC-165-discoverable interface
+(`IHooksERC20` / `IHooksERC721` / `IHooksERC1155`), so a marketplace or indexer
+can confirm a hooks address follows this calling convention without reading
+source. The one write path a hook has is deliberate and narrow:
+`hookMint` / `hookSetTokenURI`, callable only by the token's own hooks contract.
 
-**What a canonical codehash does *not* tell you.** It proves the token's own
-code is unmodified. It says nothing about the issuer or the hooks contract,
-and both still hold real power over holders:
+## Threat model and limits
 
-- The **issuer admin** can pause all transfers, burn any holder's tokens,
-  change token URIs, and set royalties.
-- The **hooks contract** runs arbitrary developer code. Its `before*` and
-  `validate*` hooks can deny any transfer, so a malicious hooks contract can
-  let the issuer sell tokens while blocking buyers from ever reselling them.
+What the design guarantees, assuming the token was deployed by its canonical
+constructor:
 
-Before buying, check who the issuer admin is and read (or verify the
-published hash of) the hooks contract at `token.hooksContract()`. Flags and
-metadata commitments remain trustworthy either way: no one, including the
-issuer or the hooks contract, can change them after mint.
+- Hooks cannot move, create, or destroy balances except through `hookMint`.
+- No one can change an NFT's flags or metadata hash after mint.
+- Token logic is the published logic: `Codehash.isCanonical(token, hash)`
+  compares `EXTCODEHASH` directly and never calls into the target.
 
-## Core concepts
+What it does **not** guarantee:
 
-- **Locked pipeline.** `transferFrom`, `mint`, `burn`, etc. are not
-  `virtual` on the concrete token contracts. There is no inheritance path
-  for a hooks author (or the issuer) to change what "transfer" means.
-- **Hooks are advisory-restrictive, not authoritative.** `before*`/`validate*`
-  hooks can only deny; they never receive a path to write token storage.
-  The one exception is hook-initiated minting (`hookMint`), which is a
-  deliberate, narrow, `onlyHooksContract`-gated entry point for use cases
-  like "mint on deposit" — even then, the hook still can't touch flags or
-  balances outside what `hookMint`/`hookSetTokenURI` expose.
-- **Flags (ERC-721/1155 only).** The issuer calls `defineFlag(bitIndex, label)`
-  once per bit — the label is permanent (`FlagAlreadyDefined` on reuse). At
-  mint, a flag bitmap and a `keccak256` metadata hash are committed
-  atomically and are never writable again by anyone, issuer included.
-  `verifyToken(tokenId, requiredFlagsMask, expectedMetadataHash)` gives a
-  buyer a single view call to check both before purchasing.
-- **Permissionless, single-transaction deployment.** Anyone can deploy their
-  own hooks contract (`new MyHooks(issuerAdmin, ...)`) and become the issuer
-  admin of their own token — the token comes into existence as a side effect
-  of that same transaction, no separate deploy call, no factory instance to
-  stand up first. Nothing here is shared across developers — see
-  "Distribution model" above.
-- **Standardized, ERC-165-discoverable hook interface.** `HooksERC20`,
-  `HooksERC721`, and `HooksERC1155` each implement a small interface —
-  `IHooksERC20`/`IHooksERC721`/`IHooksERC1155` in `contracts/interfaces/` —
-  covering just the CALL-only, fail-closed/fail-open transfer/mint/burn hook
-  shape (not flags, not admin, not hook-mint plumbing — those are additive
-  surface beyond what the interface requires). `onlyToken` access control
-  means nothing but the governed token can actually call these functions, so
-  the interface's value isn't enabling third-party calls — it's discovery:
-  `supportsInterface(type(IHooksERC721).interfaceId)` lets a marketplace,
-  indexer, or buyer confirm a hooks address follows this calling convention
-  before trusting the token it governs, without reading source or trusting
-  an off-chain claim. A conforming hooks contract always deploys a
-  brand-new token as part of its own deployment — this is deliberately not
-  a retrofit mechanism; there's no path to bolt hooks onto a token that
-  already exists.
+- **A canonical codehash does not mean canonical state.** `EXTCODEHASH`
+  covers runtime code only, not storage and not the initcode that produced it.
+  Anyone can deploy initcode that writes arbitrary storage (a phantom balance,
+  an attacker-chosen admin, a fake `hooksContract()`) and then installs the
+  canonical runtime bytecode verbatim. The result passes `isCanonical`.
+  [`test/PoisonedConstructor.t.sol`](test/PoisonedConstructor.t.sol)
+  demonstrates this end to end. Today the only way to rule it out is off-chain:
+  inspect the deployment transaction and confirm the token was created by
+  its hooks contract with the canonical initcode. A fix that can be checked
+  on-chain needs the token's address to commit to its initcode (CREATE2 from
+  the hooks contract), which is the mechanism
+  [create2-receipts](https://github.com/kalebweston100/create2-receipts) is
+  built on. That is a planned redesign, not shipped.
+- **The issuer is trusted.** The issuer admin can pause transfers, burn any
+  holder's tokens, change token URIs, and set royalties.
+- **The hooks contract is trusted.** It runs arbitrary developer code. A
+  malicious one can let the issuer sell while blocking every resale. Read the
+  hooks contract at `token.hooksContract()` before buying.
 
-## What's implemented
-
-| Concern | ERC-20 | ERC-721 | ERC-1155 |
-|---|---|---|---|
-| Hooks-deploys-its-own-token, zero-immutable token bytecode | ✅ | ✅ | ✅ |
-| Locked transfer/mint/burn pipeline | ✅ | ✅ | ✅ |
-| Hooks base + before/after/validate | ✅ | ✅ | ✅ |
-| `IHooksERC*` conformance + ERC-165 discovery | ✅ | ✅ | ✅ |
-| On-chain flags / `verifyToken` | — (N/A, fungible) | ✅ | ✅ |
-| Pause / issuer admin transfer | ✅ | ✅ | ✅ |
-| ERC-2981 royalty info | — | ✅ | not yet |
-| Example hooks contracts (`contracts/test/`) | ✅ | ✅ | ✅ |
-
-Also present: a shared `Errors.sol` (custom errors, no revert strings on
-the hot paths), a `Types.sol` (`TokenStandard` enum), a `Codehash.sol`
-library (see below), `IHooksERC20/721/1155.sol` (the interfaces `HooksERC20/721/1155`
-implement — see "Core concepts" above), and `IHooks.sol`
-(`IHookMintERC20/721/1155`) that let external tooling drive hook-initiated
-minting without knowing the concrete standard ahead of time.
+Flags and metadata commitments made at mint stay trustworthy against the
+issuer and the hooks contract either way. Against a poisoned deployment,
+nothing about the token's state is trustworthy.
 
 ## Verifying a deployment
-
-Anyone — a buyer, a marketplace, another contract — can independently
-confirm that a given token address is running the real, unmodified
-`IntegrityERC20`/`721`/`1155` implementation and not a maliciously patched
-fork, with a single on-chain check and no off-chain lookup or trusted third
-party required. `contracts/libraries/Codehash.sol`:
 
 ```solidity
 library Codehash {
@@ -180,102 +114,84 @@ library Codehash {
 }
 ```
 
-Safe to call against a token (or anything else) you don't yet trust: the
-check never calls into `target` — EXTCODEHASH is read directly by the EVM
-from the target's actual deployed bytecode, so a malicious contract can't
-misreport it the way it could if you called an `isCanonical()`-style
-function defined on the contract you're trying to verify (that contract
-could simply hardcode such a function to return true). This is also why
-`Codehash` is an `internal` library function rather than something deployed
-once and called into: it compiles directly into whatever contract uses it,
-so there's no deployed address of its own to trust in the first place —
-import it directly into a marketplace contract, an indexer, or any verifier.
+`Codehash` is an `internal` library so it compiles into the verifier; there is
+no deployed checker to trust. [`test/Codehash.t.sol`](test/Codehash.t.sol)
+shows two tokens deployed by independently configured hooks contracts having
+identical codehashes.
 
-**Why this works cleanly for tokens specifically, without a factory to
-anchor trust in:** `IntegrityERC20`/`721`/`1155` hold zero `immutable`
-state. The hooks address that governs each token is a plain (non-immutable,
-non-constant) storage slot, set exactly once in the constructor from
-`msg.sender` (the deploying contract — unspoofable, since a hooks
-contract's own constructor is what calls `new` on the token), with no
-setter anywhere in the token's source. EXTCODEHASH never includes storage,
-only code, so this keeps every canonical deployment of a given token
-contract version byte-identical forever, regardless of which hooks contract
-deployed it or what address that hooks contract has. One published hash per
-token contract version verifies every deployment of it, by anyone,
-anywhere — `test/Codehash.t.sol` demonstrates this directly: two tokens
-deployed by two independently-configured hooks contracts produce identical
-`codehash`.
+Hashes are only comparable across machines with a reproducible build. This
+repo's settings (in `foundry.toml`) are: solc `0.8.34` pinned, optimizer on
+with 200 runs, `evm_version = "cancun"`, `via_ir = true` (needed for
+`IntegrityERC1155.mintBatch`), and `bytecode_hash = "none"` /
+`cbor_metadata = false` to drop the path-dependent metadata trailer. A release
+publishes one hash per token contract alongside its tag; none has been cut yet.
 
-Hooks contracts are the opposite by design, and deliberately not covered by
-a single hash: they carry real, per-developer custom logic (that's the
-entire point of a hooks contract) and typically their own immutables (e.g.
-`issuerAdmin`), so there was never going to be one universal hash for "a
-hooks contract" the way there is for a token. `Codehash.isCanonical` still
-works against a *specific* hooks implementation if its author publishes a
-hash for it — that's just a narrower claim ("this address runs exactly the
-code its author published for this hooks contract") than the ecosystem-wide
-one a token's hash gives you.
+## What's implemented
 
-### Required compiler settings
+| | ERC-20 | ERC-721 | ERC-1155 |
+|---|---|---|---|
+| Locked transfer / mint / burn pipeline | ✅ | ✅ | ✅ |
+| Hooks base: before / validate / after | ✅ | ✅ | ✅ |
+| `IHooksERC*` + ERC-165 discovery | ✅ | ✅ | ✅ |
+| Identical bytecode across deployments | ✅ | ✅ | ✅ |
+| Flags + `verifyToken` | n/a | ✅ | ✅ |
+| Pause, issuer admin transfer | ✅ | ✅ | ✅ |
+| ERC-2981 royalties | n/a | ✅ | ✅ |
+| Holder tracking | ✅ `holderCount`, `firstReceivedAt` | ✅ `holderCount` | ✅ per id |
 
-Runtime bytecode is only comparable across independent compilations if the
-build is reproducible. Solidity appends a CBOR-encoded metadata hash to the
-end of runtime bytecode by default (derived from things like absolute file
-paths on the machine that compiled it) — two people compiling identical
-source with default settings get *different* code hashes purely from that
-trailer, with no logic difference at all. To get a hash that's actually
-comparable across machines:
+## Tests
 
-- Pin the exact compiler version you're comparing against — e.g. `0.8.34`,
-  not a floating `^0.8.34` build that could resolve to a different patch.
-- Pin the optimizer settings (enabled/disabled, `runs`), `evmVersion`, and
-  `viaIR`, and publish them alongside any hash you cite — they change the
-  bytecode. This repo's canonical settings live in `foundry.toml`: solc
-  `0.8.34`, optimizer on with `200` runs, `evmVersion = "cancun"`, and
-  `viaIR = true` (required — `IntegrityERC1155.mintBatch` has enough local
-  variables to hit solc's "stack too deep" limit without it).
-- Set `settings.metadata.bytecodeHash = "none"`. In Foundry:
-  `bytecode_hash = "none"` under `[profile.default]` in `foundry.toml`. In
-  Hardhat: `metadata: { bytecodeHash: "none" }` under the compiler
-  settings. This drops the non-reproducible metadata trailer entirely.
+`forge test` runs unit tests in `test/` and stateful invariant suites in
+`test/invariant/` for all three standards. Handlers drive random sequences of
+mints, hook-mints, transfers (including zero-value and self-transfers), burns,
+and re-mint attempts. After every step the suites check that:
 
-No hash is published in this repo yet — there is no maintained list to
-consult. Whoever cuts a release computes it themselves from the pinned
-settings above (e.g. `forge inspect IntegrityERC721 deployedBytecode | keccak256`,
-or deploy a token locally and read its `.codehash`) and publishes it
-alongside that release's tag, one hash per token contract (ERC-20/721/1155
-each need their own). The hash travels with the source, not with a person.
+- holder counts (per id for ERC-1155) equal the number of addresses with a
+  non-zero balance,
+- the sum of balances equals `totalSupply` equals minted minus burned,
+- committed NFT flags and metadata hashes never change,
+- a burned ERC-721 id can never be minted again.
+
+CI runs `forge build`, `forge test`, `forge fmt --check`, and Slither on every
+push and pull request.
 
 ## Development
 
 Requires [Foundry](https://book.getfoundry.sh/getting-started/installation).
 
 ```sh
-forge install          # fetch OpenZeppelin Contracts + forge-std into lib/
-forge build             # compile (via-ir is required — see above)
-forge test               # run the test suite
-forge fmt --check    # verify formatting matches CI
+git clone --recurse-submodules https://github.com/kalebweston100/nft-integrity-framework
+forge build
+forge test
+forge fmt --check
 ```
 
-CI (`.github/workflows/ci.yml`) runs `forge build`, `forge test`,
-`forge fmt --check`, and a Slither static-analysis pass on every push and
-pull request.
+## Layout
 
-`forge test` runs both the unit tests in `test/` and the stateful invariant
-tests in `test/invariant/`. The invariant handlers drive random sequences of
-mints, transfers, burns and re-mint attempts and check, after every step,
-that committed flags never change, burned ERC-721 ids are never re-minted,
-holder counts match actual holders, and balances add up to supply.
+```
+contracts/
+  token/       IntegrityERC20 / 721 / 1155, shared base, TokenAdmin
+  hooks/       HooksERC20 / 721 / 1155 abstract bases
+  interfaces/  IHooksERC*, IIntegrityToken, errors, types
+  libraries/   Codehash
+  test/        example hooks used by the test suite
+test/          unit tests, invariant suites, codehash + poisoned-constructor tests
+```
 
-## What's not there yet
+## Related work
 
-Packaging for consumption by other projects (a documented `forge install`
-flow for integrators, versioned releases with published bytecode hashes),
-integrator docs beyond this README, a security disclosure policy, and a
-professional audit — this repo is still **pre-audit** (see the status note
-above). See the project's working notes for the current priority order.
+- [create2-receipts](https://github.com/kalebweston100/create2-receipts):
+  on-chain facts recorded as CREATE2 addresses. Provides the
+  initcode commitment this framework needs to close the poisoned-constructor gap.
+- [proven-source](https://github.com/kalebweston100/proven-source): proving
+  on-chain that deployed bytecode matches a Solidity source, without trusting
+  a compiler.
+
+## Not yet done
+
+Security review, a versioned release with published codehashes, and the
+CREATE2-based deployment described above.
 
 ## License
 
-MIT (per-file SPDX headers already in place); a root `LICENSE` file is
-still needed.
+[MIT](LICENSE)
